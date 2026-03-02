@@ -42,6 +42,7 @@ EMPTY_PREFERENCES = {
     "attachment_style":      "",   # secure / anxious / avoidant / disorganised
     "love_languages":        [],   # words of affirmation, acts of service, etc.
     # Physical / lifestyle
+    "gender":                "",   # male / female / unspecified
     "age_range":             "",   # e.g. "25–35"
     "appearance_preferences": [],  # e.g. ["tall", "athletic build", "doesn't matter"]
     "lifestyle_habits":      [],   # e.g. ["non-smoker", "active", "social drinker ok"]
@@ -122,6 +123,7 @@ def normalize_preferences(raw):
         "deal_breakers":          norm_list(raw.get("deal_breakers")),
         "attachment_style":       norm_str(raw.get("attachment_style")),
         "love_languages":         norm_list(raw.get("love_languages")),
+        "gender":                 norm_str(raw.get("gender")),
         "age_range":              norm_str(raw.get("age_range")),
         "appearance_preferences": norm_list(raw.get("appearance_preferences")),
         "lifestyle_habits":       norm_list(raw.get("lifestyle_habits")),
@@ -139,7 +141,7 @@ def all_fields_populated(prefs):
 # ---------------------------------------------------------------
 # STAGE 1 — COLLABORATIVE INTAKE
 # ---------------------------------------------------------------
-# Goal: gather ALL 8 fields through natural conversation.
+# Goal: gather ALL 9 fields through natural conversation.
 # The AI asks one question at a time, covers personality AND
 # physical/lifestyle topics, then summarises and confirms with
 # the user before handing off to Stage 2.
@@ -148,7 +150,7 @@ def all_fields_populated(prefs):
 STAGE1_SYSTEM = (
     "You are a warm, perceptive relationship coach helping the user discover what they truly want in a long-term partner. "
     "Your job is to gather information through friendly, natural conversation — one question at a time. "
-    "Never overwhelm the user. Never repeat a question they've already answered. "
+    "Never overwhelm the user. Ask follow-up questions if needed. Never repeat a question they've already answered. "
     "Cover BOTH personality traits AND physical/lifestyle preferences — don't skip either. "
     "You must eventually populate ALL of these fields:\n"
     "  1. core_values         — key character traits or life values they want (e.g. ambition, kindness, honesty)\n"
@@ -156,9 +158,10 @@ STAGE1_SYSTEM = (
     "  3. deal_breakers       — absolute hard no's\n"
     "  4. attachment_style    — one of: secure, anxious, avoidant, disorganised\n"
     "  5. love_languages      — words of affirmation, quality time, acts of service, physical touch, gifts\n"
-    "  6. age_range           — preferred age range of a partner (e.g. '25–35')\n"
-    "  7. appearance_preferences — physical traits that matter to them (can include 'doesn't matter')\n"
-    "  8. lifestyle_habits    — preferences on smoking, drinking, fitness, diet, etc.\n\n"
+    "  6. gender              — preferred gender of partner: male, female, or unspecified\n"
+    "  7. age_range           — preferred age range of a partner (e.g. '25–35')\n"
+    "  8. appearance_preferences — physical traits that matter to them (can include 'doesn't matter')\n"
+    "  9. lifestyle_habits    — preferences on smoking, drinking, fitness, diet, etc.\n\n"
     "When ALL fields have concrete answers, output a brief, warm summary of what you've learned "
     "(in plain conversational English — NO JSON), then ask the user: "
     "'Does this feel right, or is there anything you'd like to adjust before we move on?' "
@@ -166,11 +169,11 @@ STAGE1_SYSTEM = (
     "output ONLY a raw JSON block (no surrounding text) with this exact structure:\n"
     "PREFERENCES_FINAL: { "
     "\"core_values\": [], \"emotional_needs\": [], \"deal_breakers\": [], "
-    "\"attachment_style\": \"\", \"love_languages\": [], "
+    "\"attachment_style\": \"\", \"love_languages\": [], \"gender\": \"\", "
     "\"age_range\": \"\", \"appearance_preferences\": [], \"lifestyle_habits\": [] "
     "}\n\n"
     "Rules:\n"
-    "- Do NOT output JSON until all 8 fields are filled AND the user has confirmed.\n"
+    "- Do NOT output JSON until all 9 fields are filled AND the user has confirmed.\n"
     "- If they adjust something in their confirmation reply, update the JSON accordingly.\n"
     "- After at most 12 questions without completing all fields, do your best with available data, "
     "summarise, and ask for confirmation.\n"
@@ -297,7 +300,7 @@ STAGE2_SYSTEM = (
     "When everything is resolved, write a warm one-sentence transition like: "
     "'Great — I have everything I need. Let me put together a profile for you!' "
     "and then immediately output only a raw JSON block preceded by 'PREFERENCES_UPDATED:' "
-    "with the same 8-field schema as before (updated with any clarifications).\n\n"
+    "with the same 9-field schema as before (updated with any clarifications).\n\n"
     "Always respond in plain English for your question/comment. "
     "Only output JSON when truly done."
 )
@@ -437,6 +440,7 @@ STAGE4_SYSTEM = (
     "They will give you feedback and you will update the profile accordingly. "
     "Always reprint the full updated profile after each change, clearly marking what changed. "
     "Keep the same warm, prose-based format. "
+    "Do NOT print the JSON of the profile, only the text description. "
     "After each update, ask if there's anything else they'd like to change. "
     "When the user is happy, end with a short warm closing message."
 )
