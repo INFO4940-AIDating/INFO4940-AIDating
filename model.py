@@ -8,7 +8,7 @@ from llama_cpp import Llama
 # -------------------------------
 # CONFIG
 # -------------------------------
-MODEL_PATH = "../qwen2-7b-instruct-q4_0.gguf"
+MODEL_PATH = "qwen2-7b-instruct-q4_0.gguf"
 
 # Load the model once at startup
 print("Loading model... (this may take a moment)")
@@ -23,7 +23,7 @@ print("Model loaded!")
 # -------------------------------
 # HELPER FUNCTION TO CALL LLM
 # -------------------------------
-def call_llm(messages, temperature=0.7, max_tokens=400):
+def call_llm(messages, temperature=0.7, max_tokens=24000):
     try:
         response = llm.create_chat_completion(
             messages=messages,
@@ -51,12 +51,19 @@ def stage1_intake():
             "  \"core_values\": [],\n"
             "  \"emotional_needs\": [],\n"
             "  \"deal_breakers\": [],\n"
-            "  \"attachment_style\": \"\",\n"
+            "  \"attachment_style\": [],\n"
             "  \"love_languages\": [],\n"
+            "  \"gender\": [],\n"
+            "  \"age_range\": [],\n"
+            "  \"appearance_preferences\": [],\n"
+            "  \"lifestyle_habits\": [],\n"
             "}\n\n"
             "Stop asking questions and output this JSON ONLY when you have enough information to fill every field. "
             "Do not generate a partner profile yet. Collect and clarify information interactively. "
             "After each user response, ask a natural follow-up question until the JSON can be filled."
+            "When you have gathered enough information for ALL categories above, provide a warm, conversational summary "
+            "of what you've learned about their preferences. Start your summary with 'SUMMARY:' and describe their "
+            "preferences naturally without any JSON or structured data. Keep it human and friendly."
             
         )
     }
@@ -66,29 +73,76 @@ def stage1_intake():
     messages = [system_msg, user_msg]
 
     print("\nAI Relationship Coach (Stage 1 Intake):")
-    preference_json = None
     while True:
-        ai_response = call_llm(messages)
+        ai_response = call_llm(messages, max_tokens=300)
         print("AI:", ai_response)
 
-        # Check if AI signals JSON output
-        if "User preferences:" in ai_response:
-            try:
-                # Extract JSON substring - find matching braces
-                json_start = ai_response.find("{")
-                json_end = ai_response.rfind("}") + 1  # Find LAST closing brace
-                json_str = ai_response[json_start:json_end]
-                preference_json = json.loads(json_str)
-            except Exception as e:
-                print("Error parsing JSON:", e)
+        # Check if AI has completed gathering preferences
+        if "SUMMARY:" in ai_response:
             break
+
+        # Add assistant response to conversation history
+        messages.append({"role": "assistant", "content": ai_response})
 
         # Get user input
         user_input = input("You: ")
         messages.append({"role": "user", "content": user_input})
-        messages.append({"role": "system", "content": "Continue asking the next question based on the user's answers."})
 
+    # Extract structured JSON internally (not shown to user)
+    preference_json = extract_preferences_json(messages)
     return preference_json
+
+
+def extract_preferences_json(conversation_messages):
+    """Extract structured preferences from conversation without showing to user."""
+    extraction_msg = {
+        "role": "system",
+        "content": (
+            "Based on the conversation, extract the user's relationship preferences into JSON format. "
+            "Output ONLY valid JSON, nothing else:\n"
+            "{\n"
+            '  "core_values": [],\n'
+            '  "emotional_needs": [],\n'
+            '  "deal_breakers": [],\n'
+            '  "attachment_style": "",\n'
+            '  "love_languages": [],\n'
+            '  "gender": "",\n'
+            '  "age_range": "",\n'
+            '  "appearance_preferences": [],\n'
+            '  "lifestyle_habits": []\n'
+            "}"
+        )
+    }
+    
+    # Build context from conversation
+    conversation_text = "\n".join([
+        f"{msg['role'].upper()}: {msg['content']}" 
+        for msg in conversation_messages 
+        if msg['role'] in ['user', 'assistant']
+    ])
+    
+    messages = [extraction_msg, {"role": "user", "content": f"Extract preferences from this conversation:\n{conversation_text}"}]
+    
+    response = call_llm(messages, temperature=0.1, max_tokens=500)
+    
+    try:
+        json_start = response.find("{")
+        json_end = response.rfind("}") + 1
+        json_str = response[json_start:json_end]
+        return json.loads(json_str)
+    except Exception as e:
+        print(f"Warning: Could not parse preferences: {e}")
+        return {
+            "core_values": [],
+            "emotional_needs": [],
+            "deal_breakers": [],
+            "attachment_style": "",
+            "love_languages": [],
+            "gender": "",
+            "age_range": "",
+            "appearance_preferences": [],
+            "lifestyle_habits": []
+        }
 
 # -------------------------------
 # STAGE 2: TENSION DETECTION + CLARIFICATION
