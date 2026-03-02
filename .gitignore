@@ -1,2 +1,6 @@
 # Large language model files
 *.gguf
+relationship-env/
+venv/
+env/
+.env
