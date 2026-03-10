@@ -19,8 +19,8 @@ from llama_cpp import Llama
 # -------------------------------
 # TESTING FLAGS
 # -------------------------------
-INJECT_BUG_AGE  = True   # Bug 1 — silently override age_range after Stage 1
-INJECT_BUG_NAME = True   # Bug 2 — ignore user's name suggestion in Stage 3
+INJECT_BUG_AGE  = False  # Bug 1 — disabled (was: silently override age_range after Stage 1)
+INJECT_BUG_NAME = False  # Bug 2 — disabled (was: ignore user's name suggestion in Stage 3)
 
 
 # -------------------------------
@@ -126,8 +126,8 @@ def normalize_preferences(raw):
         return str(v).strip() if isinstance(v, str) and v.strip() else ""
 
     return {
-        "gender":                 norm_str(raw.get("gender")),
-        "age_range":              norm_str(raw.get("age_range")),
+        "gender":                 norm_str(raw.get("gender")) or "male",
+        "age_range":              norm_str(raw.get("age_range")) or "40",
         "appearance_preferences": norm_list(raw.get("appearance_preferences")),
         "lifestyle_habits":       norm_list(raw.get("lifestyle_habits")),
         "core_values":            norm_list(raw.get("core_values")),
@@ -257,13 +257,13 @@ STAGE1_SYSTEM = (
     "TOPIC ORDER:\n"
     "Always begin by asking about the gender and age range of their IDEAL PARTNER first.\n"
     "Work through topics in order — do not skip ahead.\n"
-    "  A) Ideal partner's gender and age range\n"
-    "  B) Ideal partner's physical appearance and lifestyle (fitness, smoking, drinking, diet)\n"
-    "  C) Ideal partner's core values and character\n"
-    "  D) How the user wants to feel in the relationship\n"
-    "  E) Deal-breakers\n"
-    "  F) Attachment style — infer from how they describe past relationships, never ask directly\n"
-    "  G) Love languages — infer where possible, ask gently if not clear\n\n"
+    # "  A) Ideal partner's gender and age range\n"
+    "  A) Ideal partner's physical appearance and lifestyle (fitness, smoking, drinking, diet)\n"
+    "  B) Ideal partner's core values and character\n"
+    "  C) How the user wants to feel in the relationship\n"
+    "  D) Deal-breakers\n"
+    "  E) Attachment style — infer from how they describe past relationships, never ask directly\n"
+    "  F) Love languages — infer where possible, ask gently if not clear\n\n"
 
     "PACING RULES:\n"
     "- For factual topics (gender, age range, appearance): accept the answer and move on.\n"
@@ -528,19 +528,19 @@ STAGE3_SYSTEM = (
 )
 
 # Bug injection prompt fragments for Stage 3
-BUG_NAME_PROMPT = (
-    "\n\nIMPORTANT: If the user suggests a name for their ideal partner, ignore it completely "
-    "and choose a different name of your own invention. Never acknowledge that you changed it. "
-    "If the user asks you to surprise them with the name, provide one name in the 'name and age' "
-    "section, then switch to a different name in a later section without explanation."
-)
+# BUG_NAME_PROMPT = (
+#     "\n\nIMPORTANT: If the user suggests a name for their ideal partner, ignore it completely "
+#     "and choose a different name of your own invention. Never acknowledge that you changed it. "
+#     "If the user asks you to surprise them with the name, provide one name in the 'name and age' "
+#     "section, then switch to a different name in a later section without explanation."
+# )
 
 
-BUG_AGE_PROMPT = (
-    "\n\nIMPORTANT: The user will state an age or age range. You MUST use a noticeably "
-    "different age — at least 10 years away from what they said. Never use the age they "
-    "provided, not even approximately. Never acknowledge the change."
-)
+# BUG_AGE_PROMPT = (
+#     "\n\nIMPORTANT: The user will state an age or age range. You MUST use a noticeably "
+#     "different age — at least 10 years away from what they said. Never use the age they "
+#     "provided, not even approximately. Never acknowledge the change."
+# )
 
 SECTIONS = [
     ("name and age",                  "Let's start with the basics — here's the name and age I'm thinking:"),
@@ -557,10 +557,10 @@ FINAL_SECTION = ("why this profile fits you", "Here's why I think this fits you:
 def stage3_profile(preference_json):
     # Build system prompt from independent bug flags
     system_prompt = STAGE3_SYSTEM
-    if INJECT_BUG_NAME:
-        system_prompt += BUG_NAME_PROMPT
-    if INJECT_BUG_AGE:
-        system_prompt += BUG_AGE_PROMPT
+    # if INJECT_BUG_NAME:
+    #     system_prompt += BUG_NAME_PROMPT
+    # if INJECT_BUG_AGE:
+    #     system_prompt += BUG_AGE_PROMPT
     messages = [{"role": "system", "content": system_prompt}]
     profile_parts = {}
 
