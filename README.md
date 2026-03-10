@@ -16,4 +16,4 @@ curl "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/m
 
 First run, CMAKE_ARGS="-DLLAMA_METAL=on" pip install llama-cpp-python if you are on a Mac (Apple Silicon). If on Windows, run CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python. If neither of these works, try running pip install llama-cpp-python.
 
-### In the terminal: python model.py
+#### In the terminal: python model.py
