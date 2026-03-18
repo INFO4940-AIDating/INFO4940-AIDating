@@ -940,18 +940,6 @@ def stage3_profile(preference_json):
     print(ai_response)
     print(f"\n{'─' * 60}\n")
 
-    # ── Trust Recovery: Error 2 detection (zero cost) ────────────────
-    # A single natural question — already a normal part of the conversation.
-    # No extra prompting, no framing around trust recovery.
-    # Keyword scan on the user's reply — no LLM call.
-    print("AI: Does this feel right to you, or is something off?\n")
-    profile_reaction = input("You: ").strip()
-    print()
-
-    if trust_recovery.user_signals_dissatisfaction(profile_reaction):
-        ai_response = trust_recovery.recover_error2(ai_response, preference_json)
-    # ─────────────────────────────────────────────────────────────────
-
     return ai_response
 
 # -------------------------------
@@ -977,21 +965,26 @@ def stage4_refinement(preference_json, profile_text):
         print("\nAI: No profile to refine yet.\n")
         return
 
-    suggestion_msg = [
-        {
-            "role": "system",
-            "content": (
-                "Based on the profile below, suggest 2-3 specific things the user might want "
-                "to personalize or adjust. Be brief and conversational."
-            )
-        },
-        {"role": "user", "content": f"Profile:\n{profile_text}"}
-    ]
-    suggestions = call_llm(suggestion_msg, max_tokens=150)
+    # ── Trust Recovery: Error 2 detection (zero cost) ────────────────
+    # Ask if the profile feels right — the user's answer becomes the
+    # first refinement input so feedback is never lost.
+    print("AI: Does this feel right to you, or is something off?")
+    print("(Type 'done' when you're happy with it.)\n")
+    initial_reaction = input("You: ").strip()
+    print()
 
-    print("What would you like to change? A few things you might consider:")
-    print(suggestions if suggestions else "The backstory, the career, or a small quirk that makes the person feel real.")
-    print("\nType 'done' when you're happy with it.\n")
+    # If user is already happy, exit early
+    if initial_reaction.lower() in {"done", "exit", "quit", "finished", "that's it", "looks good", "yes", "yeah", "perfect", "love it"}:
+        print(
+            "\nAI: Wonderful! I hope this profile gives you a clear sense of what you're looking for. "
+            "Good luck — you deserve someone great.\n"
+        )
+        return
+
+    # If dissatisfaction detected, run trust recovery first
+    if trust_recovery.user_signals_dissatisfaction(initial_reaction):
+        profile_text = trust_recovery.recover_error2(profile_text, preference_json)
+    # ─────────────────────────────────────────────────────────────────
 
     # frozen_profile: the last version the user has implicitly approved
     # by not complaining about it. Advances on every accepted edit.
@@ -1007,8 +1000,15 @@ def stage4_refinement(preference_json, profile_text):
         {"role": "assistant", "content": "I have the profile here. What would you like to tweak?"}
     ]
 
+    # Use the initial reaction as the first feedback so it isn't lost
+    first_feedback = initial_reaction
+
     while True:
-        feedback = input("You: ").strip()
+        if first_feedback:
+            feedback = first_feedback
+            first_feedback = None
+        else:
+            feedback = input("You: ").strip()
         if not feedback:
             continue
         if feedback.lower() in {"done", "exit", "quit", "finished", "that's it", "looks good"}:
@@ -1056,7 +1056,8 @@ def stage4_refinement(preference_json, profile_text):
         messages.append({"role": "assistant", "content": ai_response})
         print(f"\n{'─' * 60}\n")
         print(ai_response)
-        print(f"\n{'─' * 60}\n")
+        print(f"\n{'─' * 60}")
+        print("(Type 'done' when you're happy with it.)\n")
 
         # Advance the frozen reference to this new version.
         # If the user complains on the next turn, we revert to this.
