@@ -845,12 +845,36 @@ def stage2_proposition(user_portrait, relationship_type):
         # Trust Recovery: Error 1 detection
         confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
 
-        user_input = input("You: ").strip()
-        messages.append({"role": "user", "content": user_input})
-        print()
+        acceptance_keywords = {
+            "yes", "yeah", "yep", "looks good", "that's right", "correct", "good",
+            "perfect", "spot on", "exactly", "sure", "ok", "okay", "that's it",
+            "all good", "looks right", "looks great", "no changes", "fine", "done"
+        }
 
-        if confusion_pending:
-            trust_recovery.recover_error1(user_input, messages, user_portrait)
+        while True:
+            user_input = input("You (type 'yes' to confirm, or suggest changes): ").strip()
+            messages.append({"role": "user", "content": user_input})
+            print()
+
+            if confusion_pending:
+                trust_recovery.recover_error1(user_input, messages, user_portrait)
+                confusion_pending = False
+
+            if user_input.lower().strip() in acceptance_keywords:
+                break
+
+            # User gave feedback — re-generate trait map with their correction
+            retry_messages = [
+                {"role": "system", "content": STAGE2_TRAIT_MAP_SYSTEM},
+                {"role": "user", "content": user_context},
+                {"role": "assistant", "content": ai_response},
+                {"role": "user", "content": f"The user wants to adjust the trait map: {user_input}\n\nPlease re-present the trait map with the user's corrections applied."}
+            ]
+            ai_response = call_llm(retry_messages, max_tokens=400)
+            if ai_response:
+                print("AI:", ai_response, "\n")
+                messages.append({"role": "assistant", "content": ai_response})
+                confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
 
     # --- Phase B: Select Categories (no user interaction) ---
     select_msg = [
@@ -876,6 +900,12 @@ def stage2_proposition(user_portrait, relationship_type):
         f"{m['role'].upper()}: {m['content']}" for m in messages if m['role'] in ('assistant', 'user')
     )
 
+    acceptance_keywords = {
+        "yes", "yeah", "yep", "looks good", "that's right", "correct", "good",
+        "perfect", "spot on", "exactly", "sure", "ok", "okay", "that's it",
+        "all good", "looks right", "looks great", "no changes", "fine", "done"
+    }
+
     for category_name in category_names:
         cat_system = STAGE2_CATEGORY_SYSTEM.format(
             relationship_type=relationship_type,
@@ -899,12 +929,30 @@ def stage2_proposition(user_portrait, relationship_type):
 
             confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
 
-            user_input = input("You: ").strip()
-            messages.append({"role": "user", "content": user_input})
-            print()
+            while True:
+                user_input = input("You (type 'yes' to confirm, or suggest changes): ").strip()
+                messages.append({"role": "user", "content": user_input})
+                print()
 
-            if confusion_pending:
-                trust_recovery.recover_error1(user_input, messages, user_portrait)
+                if confusion_pending:
+                    trust_recovery.recover_error1(user_input, messages, user_portrait)
+                    confusion_pending = False
+
+                if user_input.lower().strip() in acceptance_keywords:
+                    break
+
+                # User gave feedback — re-generate same category with their correction
+                retry_messages = [
+                    {"role": "system", "content": cat_system},
+                    {"role": "user", "content": cat_context},
+                    {"role": "assistant", "content": ai_response},
+                    {"role": "user", "content": f"The user wants to adjust this ranking: {user_input}\n\nPlease re-present this category with the user's corrections applied."}
+                ]
+                ai_response = call_llm(retry_messages, max_tokens=400)
+                if ai_response:
+                    print("AI:", ai_response, "\n")
+                    messages.append({"role": "assistant", "content": ai_response})
+                    confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
 
             # Update confirmed conversation for next category
             confirmed_trait_map = "\n".join(
@@ -929,12 +977,30 @@ def stage2_proposition(user_portrait, relationship_type):
 
         confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
 
-        user_input = input("You: ").strip()
-        messages.append({"role": "user", "content": user_input})
-        print()
+        while True:
+            user_input = input("You (type 'yes' to confirm, or suggest changes): ").strip()
+            messages.append({"role": "user", "content": user_input})
+            print()
 
-        if confusion_pending:
-            trust_recovery.recover_error1(user_input, messages, user_portrait)
+            if confusion_pending:
+                trust_recovery.recover_error1(user_input, messages, user_portrait)
+                confusion_pending = False
+
+            if user_input.lower().strip() in acceptance_keywords:
+                break
+
+            # User gave feedback — re-generate deal breakers with their correction
+            retry_messages = [
+                {"role": "system", "content": db_system},
+                {"role": "user", "content": db_context},
+                {"role": "assistant", "content": ai_response},
+                {"role": "user", "content": f"The user wants to adjust the deal breakers: {user_input}\n\nPlease re-present the deal breakers with the user's corrections applied."}
+            ]
+            ai_response = call_llm(retry_messages, max_tokens=300)
+            if ai_response:
+                print("AI:", ai_response, "\n")
+                messages.append({"role": "assistant", "content": ai_response})
+                confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
 
     print("AI: PROPOSITION CONFIRMED — I have everything I need. Let's build your profile.\n")
 
