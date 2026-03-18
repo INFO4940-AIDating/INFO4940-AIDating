@@ -364,44 +364,75 @@ def get_about_you_system_prompt(relationship_type=""):
     )
 
 
-def get_proposition_system_prompt(relationship_type=""):
+def get_trait_map_system_prompt():
     return (
         "You are a warm, insightful relationship coach. You have just learned a lot about "
-        "the user as a person. Now your job is to do TWO things in your FIRST message:\n\n"
-        "1. TRAIT MAP — Show the user a brief, readable summary of the personality traits you picked up on. "
-        "Frame it warmly: 'Based on what you've shared, here's what I see in you...' "
+        "the user as a person. Your job RIGHT NOW is to show them a brief, readable summary of the personality "
+        "traits you picked up on.\n\n"
+        "Frame it warmly: 'Based on what you've shared, here's what I see in you...'\n"
         "Map them along these dimensions (use plain language, not jargon):\n"
         "   - Social energy (introvert <-> extravert)\n"
         "   - Thinking style (concrete/practical <-> abstract/big-picture)\n"
         "   - Decision-making (head-first <-> heart-first)\n"
         "   - Structure (planner <-> spontaneous)\n"
-        "   - Openness (comfort-seeking <-> novelty-seeking)\n"
+        "   - Openness (comfort-seeking <-> novelty-seeking)\n\n"
         "Keep it to a short paragraph — not a list, not a quiz result. Make it feel like a friend "
         "reflecting back what they've noticed.\n\n"
-        "2. INFERRED PRIORITIES — Based on who this person IS (their trait map), infer what they would "
-        f"benefit from in their {relationship_type}. Do NOT just repeat what they said — make genuine "
-        "inferences based on personality-compatibility principles.\n\n"
-        "Use multiple personality frameworks such as MBTI personality theory, Enneagram, PERSOC dynamics, "
-        "and DiSC to analyze the user's traits and infer what they would benefit from. Choose specific "
-        "frameworks based on the relationship type — for example, love languages for romantic relationships, "
-        "DiSC for workplace relationships. Briefly name which framework(s) informed each ranking.\n\n"
-        "Select 4-6 relevant dimension categories from this menu, based on the relationship type:\n"
-        f"{DIMENSION_MENU}\n"
-        "For each selected category, list 2-4 ranked items with a ONE-LINE explanation of why you "
-        "placed it there, tied to what you know about the user. Format as clear, organized categories "
-        "with numbered items.\n\n"
-        "End by asking the user to react: reorder, add, remove, or confirm.\n\n"
+        "End by asking: 'Does this feel right, or would you adjust anything?'\n\n"
         "STRICT RULES:\n"
-        "- Present the trait map FIRST, then the inferred priorities.\n"
+        "- Do NOT infer what the user needs in a partner or relationship yet — that comes next.\n"
+        "- Do NOT list categories, ranked items, or deal breakers.\n"
+        "- If a user's correction seems to contradict something they said earlier, start your response "
+        "with exactly 'I want to check something —' before asking for clarification."
+    )
+
+def get_select_categories_prompt():
+    return (
+        "Based on the user's portrait and the relationship type they are looking for, "
+        "select 4-6 relevant dimension categories from this menu:\n\n"
+        f"{DIMENSION_MENU}\n"
+        "STRICT RULES:\n"
         "- The categories you choose must make sense for the relationship type. Do NOT use love languages "
         "for a squash partner. Do NOT use competitiveness for a romantic partner (unless it came up).\n"
+        "- Do NOT include 'Deal breakers' as a category — those are handled separately.\n"
+        "- Output ONLY a valid JSON array of category name strings, nothing else.\n"
+        '  Example: ["Personality Traits", "Communication Style", "Core Values", "Emotional Needs"]'
+    )
+
+def get_category_system_prompt(relationship_type, category_name):
+    return (
+        "You are a warm, insightful relationship coach presenting ONE specific dimension "
+        f"category for the user's {relationship_type}.\n\n"
+        "You have already shown the user their trait map (confirmed below). Now present the category "
+        f'"{category_name}" with 2-4 ranked items. For each item, give a ONE-LINE explanation of why you '
+        "placed it there, tied to what you know about the user.\n\n"
+        "Use personality frameworks (MBTI, Enneagram, PERSOC, DiSC, etc.) where relevant. Briefly name "
+        "which framework(s) informed each ranking.\n\n"
+        "Format as a clear numbered list under the category heading.\n\n"
+        'End by asking: "Does this ordering feel right, or would you adjust anything?"\n\n'
+        "STRICT RULES:\n"
+        "- Present ONLY this one category. Do NOT show other categories or deal breakers.\n"
         "- Frame everything as inference, not prescription: 'I think...' / 'Based on who you are...' "
         "not 'You need...' / 'You should look for...'\n"
         "- NEVER give examples when asking for feedback. Let the user tell you what to change.\n"
         "- If a user's correction seems to contradict something they said earlier, start your response "
-        "with exactly 'I want to check something —' before asking for clarification.\n"
-        "- Maximum 3 rounds of back-and-forth. After the user confirms (or after 3 rounds), "
-        "output exactly 'PROPOSITION CONFIRMED' and stop.\n"
+        "with exactly 'I want to check something —' before asking for clarification."
+    )
+
+def get_deal_breakers_system_prompt(relationship_type):
+    return (
+        "You are a warm, insightful relationship coach. Based on everything you know "
+        "about the user — their trait map, confirmed priorities, and the conversation so far — infer "
+        f"2-4 deal breakers for their {relationship_type}.\n\n"
+        "These should be behaviors or traits that are non-negotiable given who this person is. Frame them "
+        "as what would be genuinely incompatible with the user's personality and needs.\n\n"
+        'End by asking: "Are these the right deal breakers, or would you add, remove, or change any?"\n\n'
+        "STRICT RULES:\n"
+        "- Present ONLY deal breakers. Do NOT repeat the trait map or dimension categories.\n"
+        "- Keep each deal breaker to one concise line.\n"
+        '- Frame as inference: "Based on who you are, I think these would be real problems..."\n'
+        "- If a user's correction seems to contradict something they said earlier, start your response "
+        "with exactly 'I want to check something —' before asking for clarification."
     )
 
 
@@ -593,9 +624,6 @@ def check_stage_completion(stage, ai_response, round_count=0):
         has_conclusion = any(p in ai_response.lower() for p in concluding_phrases)
         if "?" not in ai_response and has_conclusion:
             return True
-    elif stage == "proposition":
-        if "PROPOSITION CONFIRMED" in ai_response or round_count >= 3:
-            return True
     elif stage == "tension":
         if "resolved" in ai_response.lower() or round_count >= 3:
             return True
@@ -641,6 +669,16 @@ def init_session_state():
         st.session_state.confusion_pending = False
     if "last_feedback" not in st.session_state:
         st.session_state.last_feedback = None
+    if "trait_map_confirmed" not in st.session_state:
+        st.session_state.trait_map_confirmed = False
+    if "proposition_categories" not in st.session_state:
+        st.session_state.proposition_categories = []
+    if "current_category_index" not in st.session_state:
+        st.session_state.current_category_index = 0
+    if "awaiting_deal_breakers" not in st.session_state:
+        st.session_state.awaiting_deal_breakers = False
+    if "deal_breakers_confirmed" not in st.session_state:
+        st.session_state.deal_breakers_confirmed = False
 
 def advance_stage():
     current_idx = STAGES.index(st.session_state.stage)
@@ -656,6 +694,11 @@ def advance_stage():
         st.session_state.profile_check_response = None
         st.session_state.awaiting_initial_refinement = False
         st.session_state.initial_refinement_response = None
+        st.session_state.trait_map_confirmed = False
+        st.session_state.proposition_categories = []
+        st.session_state.current_category_index = 0
+        st.session_state.awaiting_deal_breakers = False
+        st.session_state.deal_breakers_confirmed = False
 
 # -------------------------------
 # STAGE HANDLERS
@@ -699,20 +742,39 @@ def handle_summary_confirmation(user_input):
     start_proposition_stage()
 
 def start_proposition_stage():
-    system_msg = {"role": "system", "content": get_proposition_system_prompt(st.session_state.relationship_type)}
-    user_context = {"role": "user", "content": f"The user is looking for: {st.session_state.relationship_type}\n\nHere is the structured portrait of who they are:\n{json.dumps(st.session_state.user_portrait, indent=2)}"}
+    user_context_text = (
+        f"The user is looking for: {st.session_state.relationship_type}\n\n"
+        f"Here is the structured portrait of who they are:\n"
+        f"{json.dumps(st.session_state.user_portrait, indent=2)}"
+    )
+    system_msg = {"role": "system", "content": get_trait_map_system_prompt()}
+    user_context = {"role": "user", "content": user_context_text}
     st.session_state.stage_messages = [system_msg, user_context]
 
-    transition_msg = "Based on what I've learned about you, let me map out what I think matters most..."
+    transition_msg = "Based on what I've learned about you, let me reflect back what I see..."
     st.session_state.messages.append({"role": "assistant", "content": transition_msg})
 
-    with st.spinner("Analyzing your priorities..."):
-        ai_response = call_llm(st.session_state.stage_messages, max_tokens=800)
+    st.session_state.trait_map_confirmed = False
+    st.session_state.proposition_categories = []
+    st.session_state.current_category_index = 0
+    st.session_state.awaiting_deal_breakers = False
+    st.session_state.deal_breakers_confirmed = False
+
+    with st.spinner("Reflecting on who you are..."):
+        ai_response = call_llm(st.session_state.stage_messages, max_tokens=400)
 
     if ai_response:
         st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
         st.session_state.messages.append({"role": "assistant", "content": ai_response})
         st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+
+def _get_proposition_conversation_text():
+    """Build the confirmed conversation text from stage_messages for context."""
+    return "\n".join(
+        f"{m['role'].upper()}: {m['content']}"
+        for m in st.session_state.stage_messages
+        if m['role'] in ('assistant', 'user')
+    )
 
 def handle_proposition(user_input):
     if st.session_state.confusion_pending:
@@ -721,24 +783,103 @@ def handle_proposition(user_input):
 
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.session_state.stage_messages.append({"role": "user", "content": user_input})
-    st.session_state.round_count += 1
 
-    with st.spinner("Thinking..."):
-        ai_response = call_llm(st.session_state.stage_messages, max_tokens=800)
+    user_context_text = (
+        f"The user is looking for: {st.session_state.relationship_type}\n\n"
+        f"Here is the structured portrait of who they are:\n"
+        f"{json.dumps(st.session_state.user_portrait, indent=2)}"
+    )
 
-    if ai_response:
-        st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
-        st.session_state.messages.append({"role": "assistant", "content": ai_response})
-        st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+    if not st.session_state.trait_map_confirmed:
+        # User just reacted to the trait map — now select categories and show first one
+        with st.spinner("Selecting what matters most..."):
+            # Select categories (no user interaction)
+            select_messages = [
+                {"role": "system", "content": get_select_categories_prompt()},
+                {"role": "user", "content": user_context_text}
+            ]
+            category_response = call_llm(select_messages, temperature=0.1, max_tokens=200)
 
-        if check_stage_completion("proposition", ai_response, st.session_state.round_count):
-            with st.spinner("Finalizing priorities..."):
-                st.session_state.proposition_data = extract_proposition(
-                    st.session_state.stage_messages,
-                    st.session_state.relationship_type
-                )
-            advance_stage()
-            start_tension_stage()
+            try:
+                json_start = category_response.find("[")
+                json_end = category_response.rfind("]") + 1
+                st.session_state.proposition_categories = json.loads(category_response[json_start:json_end])
+            except Exception:
+                st.session_state.proposition_categories = ["Personality Traits", "Communication Style", "Core Values", "Emotional Needs"]
+
+            transition = "Now let me walk you through what I think matters most, one area at a time."
+            st.session_state.messages.append({"role": "assistant", "content": transition})
+
+            # Generate first category
+            category_name = st.session_state.proposition_categories[0]
+            confirmed_text = _get_proposition_conversation_text()
+            cat_messages = [
+                {"role": "system", "content": get_category_system_prompt(st.session_state.relationship_type, category_name)},
+                {"role": "user", "content": f"{user_context_text}\n\nConfirmed trait map conversation so far:\n{confirmed_text}"}
+            ]
+            ai_response = call_llm(cat_messages, max_tokens=400)
+
+        if ai_response:
+            st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
+            st.session_state.messages.append({"role": "assistant", "content": ai_response})
+            st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+
+        st.session_state.trait_map_confirmed = True
+        st.session_state.current_category_index = 0
+
+    elif st.session_state.current_category_index < len(st.session_state.proposition_categories):
+        # User just reacted to a category — advance to next category or deal breakers
+        st.session_state.current_category_index += 1
+
+        if st.session_state.current_category_index < len(st.session_state.proposition_categories):
+            # More categories to show
+            category_name = st.session_state.proposition_categories[st.session_state.current_category_index]
+            confirmed_text = _get_proposition_conversation_text()
+            cat_messages = [
+                {"role": "system", "content": get_category_system_prompt(st.session_state.relationship_type, category_name)},
+                {"role": "user", "content": f"{user_context_text}\n\nConfirmed conversation so far:\n{confirmed_text}"}
+            ]
+
+            with st.spinner("Thinking..."):
+                ai_response = call_llm(cat_messages, max_tokens=400)
+
+            if ai_response:
+                st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
+                st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+        else:
+            # All categories done — show deal breakers
+            confirmed_text = _get_proposition_conversation_text()
+            db_messages = [
+                {"role": "system", "content": get_deal_breakers_system_prompt(st.session_state.relationship_type)},
+                {"role": "user", "content": f"{user_context_text}\n\nFull confirmed conversation so far:\n{confirmed_text}"}
+            ]
+
+            with st.spinner("Thinking about deal breakers..."):
+                ai_response = call_llm(db_messages, max_tokens=300)
+
+            if ai_response:
+                st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
+                st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+
+            st.session_state.awaiting_deal_breakers = True
+
+    elif st.session_state.awaiting_deal_breakers:
+        # User just reacted to deal breakers — extract proposition and advance
+        st.session_state.awaiting_deal_breakers = False
+        st.session_state.deal_breakers_confirmed = True
+
+        confirmed_msg = "Great — I have everything I need. Let's build your profile."
+        st.session_state.messages.append({"role": "assistant", "content": confirmed_msg})
+
+        with st.spinner("Finalizing priorities..."):
+            st.session_state.proposition_data = extract_proposition(
+                st.session_state.stage_messages,
+                st.session_state.relationship_type
+            )
+        advance_stage()
+        start_tension_stage()
 
 def start_tension_stage():
     system_msg = {"role": "system", "content": TENSION_SYSTEM_PROMPT}
@@ -1019,27 +1160,7 @@ def main():
 
     elif st.session_state.stage == "proposition":
         if user_input := st.chat_input("Your response..."):
-            st.session_state.messages.append({"role": "user", "content": user_input})
-            st.session_state.stage_messages.append({"role": "user", "content": user_input})
-            st.session_state.round_count += 1
-            st.rerun()
-
-        if len(st.session_state.stage_messages) > 2 and st.session_state.stage_messages[-1]["role"] == "user":
-            with st.spinner("Thinking..."):
-                ai_response = call_llm(st.session_state.stage_messages, max_tokens=800)
-                if ai_response:
-                    st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
-                    st.session_state.messages.append({"role": "assistant", "content": ai_response})
-                    st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
-
-                    if check_stage_completion("proposition", ai_response, st.session_state.round_count):
-                        with st.spinner("Finalizing priorities..."):
-                            st.session_state.proposition_data = extract_proposition(
-                                st.session_state.stage_messages,
-                                st.session_state.relationship_type
-                            )
-                        advance_stage()
-                        start_tension_stage()
+            handle_proposition(user_input)
             st.rerun()
 
     elif st.session_state.stage == "tension":

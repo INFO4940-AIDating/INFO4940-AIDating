@@ -23,15 +23,17 @@ TEST_MODE = False  # Set to True to run flow test without the real model
 _test_llm_idx = 0
 _test_input_idx = 0
 
-# Mock LLM responses (15) — ordered to match the exact call sequence:
+# Mock LLM responses (20) — ordered to match the exact call sequence:
 #   Stage 1: 5 personality questions (0-4) + 1 SUMMARY (5)
 #   extract_user_portrait: JSON (6)
-#   Stage 2 round 1: trait map + ranked priorities (7)
-#   Stage 2 round 2: PROPOSITION CONFIRMED (8)
-#   extract_proposition: JSON (9)
-#   Stage 3: 2 tension questions + wrap-up confirmation (10-12)
-#   Stage 4: profile text (13)
-#   Stage 5: refinement suggestions (14)
+#   Stage 2 Phase A: trait map paragraph (7)
+#   Stage 2 Phase B: category selection JSON (8)
+#   Stage 2 Phase C: category 1-4 ranked items (9-12)
+#   Stage 2 Phase D: deal breakers (13)
+#   extract_proposition: JSON (14)
+#   Stage 3: 2 tension questions + wrap-up confirmation (15-17)
+#   Stage 4: profile text (18)
+#   Stage 5: refinement suggestions (19)
 _TEST_LLM_RESPONSES = [
     # Stage 1 — learning about the user (personality only, no partner prefs)
     "What's something you find yourself drawn to — whether it's an activity, a topic, or a way of spending your time — that you think says a lot about who you are?",
@@ -43,10 +45,20 @@ _TEST_LLM_RESPONSES = [
     "SUMMARY: You are a thoughtful, introspective person who values depth and meaning in your daily life. You're drawn to reading, hiking, and long conversations about abstract ideas — pursuits that reflect your curiosity and preference for substance over surface. Socially, you tend to listen first and contribute when you have something meaningful to say, suggesting a quieter but deeply engaged social energy. You handle unexpected changes with mild discomfort but adapt well, pointing to a preference for structure with enough flexibility to go with the flow. Your decision-making leans toward empathy — you consider how things affect others before defaulting to logic. And when it comes to novelty, you're genuinely curious but prefer to ease in rather than dive headfirst, suggesting openness balanced with caution.",
     # extract_user_portrait — valid JSON
     '{"personality_traits": ["introspective", "curious", "empathetic", "thoughtful"], "communication_style": "Listens first, contributes when meaningful — reserved but deeply engaged", "values": ["authenticity", "depth", "growth", "kindness"], "lifestyle": "Enjoys reading, hiking, long conversations; prefers substance over surface", "social_energy": "Introverted — recharges alone, values small meaningful connections", "thinking_style": "Abstract and reflective, drawn to big-picture ideas", "decision_making": "Empathy-first — considers impact on others before logic", "structure_vs_spontaneity": "Prefers structure but adapts when needed", "openness_to_experience": "Curious but cautious — eases into novelty rather than diving in", "relationship_tendencies": "Supportive, values emotional depth, shows care through attentiveness", "big_five_estimates": {"extraversion": "low", "openness": "medium-high", "agreeableness": "high", "conscientiousness": "medium-high", "neuroticism": "low-medium"}}',
-    # Stage 2 round 1 — trait map + inferred priorities with framework ranking
-    "Based on what you've shared, here's what I see in you:\n\nYou're someone who moves through the world thoughtfully and deliberately. Your social energy leans introverted — you don't need a crowd to feel connected, but when you do engage, you bring real depth to the conversation. You're a big-picture thinker who values ideas and meaning, and you make decisions with empathy at the center. You like having a plan, but you're not rigid about it. And you're genuinely curious about new experiences, as long as you can approach them at your own pace.\n\n**Personality Traits (informed by MBTI: INFJ pattern + Enneagram Type 4/5 blend):**\n1. Emotional intelligence — someone who reads between the lines and meets you where you are\n2. Warmth — genuine kindness, not performative niceness\n3. Intellectual curiosity — a mind that lights up at ideas, not just small talk\n4. Patience — comfortable with your reflective pace\n\n**Communication Style (informed by DiSC: Steadiness pattern):**\n1. Thoughtful listener — someone who hears what you're actually saying\n2. Direct but gentle — honest without being blunt\n3. Comfortable with silence — doesn't need to fill every gap\n\n**Core Values:**\n1. Authenticity — what you see is what you get\n2. Growth orientation — always becoming, never stagnant\n3. Loyalty — shows up consistently\n\n**Deal Breakers:**\n1. Emotional unavailability\n2. Dismissiveness or contempt\n3. Superficiality\n\nHow does this land? Anything you'd reorder, add, or remove?",
-    # Stage 2 round 2 — user confirms
-    "PROPOSITION CONFIRMED",
+    # Stage 2 Phase A — trait map paragraph only
+    "Based on what you've shared, here's what I see in you:\n\nYou're someone who moves through the world thoughtfully and deliberately. Your social energy leans introverted — you don't need a crowd to feel connected, but when you do engage, you bring real depth to the conversation. You're a big-picture thinker who values ideas and meaning, and you make decisions with empathy at the center. You like having a plan, but you're not rigid about it. And you're genuinely curious about new experiences, as long as you can approach them at your own pace.\n\nDoes this feel right, or would you adjust anything?",
+    # Stage 2 Phase B — category selection JSON (no user interaction)
+    '["Personality Traits", "Communication Style", "Core Values", "Emotional Needs"]',
+    # Stage 2 Phase C — category 1: Personality Traits
+    "**Personality Traits (informed by MBTI: INFJ pattern + Enneagram Type 4/5 blend):**\n1. Emotional intelligence — someone who reads between the lines and meets you where you are\n2. Warmth — genuine kindness, not performative niceness\n3. Intellectual curiosity — a mind that lights up at ideas, not just small talk\n4. Patience — comfortable with your reflective pace\n\nDoes this ordering feel right, or would you adjust anything?",
+    # Stage 2 Phase C — category 2: Communication Style
+    "**Communication Style (informed by DiSC: Steadiness pattern):**\n1. Thoughtful listener — someone who hears what you're actually saying\n2. Direct but gentle — honest without being blunt\n3. Comfortable with silence — doesn't need to fill every gap\n\nDoes this ordering feel right, or would you adjust anything?",
+    # Stage 2 Phase C — category 3: Core Values
+    "**Core Values:**\n1. Authenticity — what you see is what you get\n2. Growth orientation — always becoming, never stagnant\n3. Loyalty — shows up consistently\n\nDoes this ordering feel right, or would you adjust anything?",
+    # Stage 2 Phase C — category 4: Emotional Needs
+    "**Emotional Needs:**\n1. Emotional availability — someone who is present and open\n2. Deep conversation — connection through ideas and feelings\n3. Stability with warmth — a grounding presence that still feels alive\n\nDoes this ordering feel right, or would you adjust anything?",
+    # Stage 2 Phase D — deal breakers
+    "Based on who you are, I think these would be real problems in a relationship for you:\n\n1. **Emotional unavailability** — you lead with empathy and need that reciprocated\n2. **Dismissiveness or contempt** — incompatible with your values of depth and kindness\n3. **Superficiality** — you seek substance; surface-level connection would drain you\n\nAre these the right deal breakers, or would you add, remove, or change any?",
     # extract_proposition — valid JSON
     '{"relationship_type": "romantic partner", "user_trait_summary": "Introspective, empathetic, curious. Introverted social energy, abstract thinker, empathy-first decisions, prefers structure with flexibility, cautiously open to novelty.", "selected_dimensions": [{"category": "Personality Traits", "ranked_items": [{"item": "Emotional intelligence", "reasoning": "Matches user empathy-first style (INFJ pattern)"}, {"item": "Warmth and genuine kindness", "reasoning": "Complements user high agreeableness"}, {"item": "Intellectual curiosity", "reasoning": "Matches user abstract thinking style"}, {"item": "Patience", "reasoning": "Supports user reflective pace"}]}, {"category": "Communication Style", "ranked_items": [{"item": "Thoughtful listener", "reasoning": "Matches user reserved engagement style (DiSC Steadiness)"}, {"item": "Direct but gentle", "reasoning": "User values authenticity without harshness"}, {"item": "Comfortable with silence", "reasoning": "Respects user introverted recharge needs"}]}, {"category": "Core Values", "ranked_items": [{"item": "Authenticity", "reasoning": "User top value"}, {"item": "Growth orientation", "reasoning": "User drawn to depth and becoming"}, {"item": "Loyalty", "reasoning": "User values consistent presence"}]}, {"category": "Emotional Needs", "ranked_items": [{"item": "Emotional availability", "reasoning": "User empathy-first — needs reciprocation"}, {"item": "Deep conversation", "reasoning": "User primary connection mode"}, {"item": "Stability with warmth", "reasoning": "Matches structure preference + high agreeableness"}]}], "deal_breakers": ["Emotional unavailability", "Dismissiveness or contempt", "Superficiality"]}',
     # Stage 3 — tension questions
@@ -60,7 +72,7 @@ _TEST_LLM_RESPONSES = [
     "A few things you might want to personalize:\n- Elara's specific hobbies beyond reading — does she play an instrument, cook, garden?\n- The tone of her backstory — would you like her to have overcome something, or is the calm upbringing right?\n- Any physical details you'd like to add or adjust.",
 ]
 
-# Mock user inputs (12) — ordered to match the exact input() call sequence
+# Mock user inputs (17) — ordered to match the exact input() call sequence
 _TEST_USER_INPUTS = [
     # Upfront relationship type question (run_prototype)
     "A romantic partner — someone for a serious long-term relationship.",
@@ -70,8 +82,15 @@ _TEST_USER_INPUTS = [
     "Honestly, it throws me off a bit at first, but I adapt. I like having a plan, but I'm not rigid about it.",
     "I lean toward how it'll make people feel. I always consider the emotional impact first, then the logic.",
     "I'm curious about it, but I like to ease in rather than jump headfirst. I warm up to new things on my own terms.",
-    # Stage 2 — 1 answer after seeing trait map + priorities
-    "This is really accurate. I'd keep everything as is — maybe just emphasize that emotional availability is the single most important thing to me.",
+    # Stage 2 Phase A — trait map approval
+    "That captures me well.",
+    # Stage 2 Phase C — category approvals (one per category)
+    "Looks right.",
+    "Good.",
+    "Yes.",
+    "Agreed.",
+    # Stage 2 Phase D — deal breakers approval
+    "Yes, those are right.",
     # Stage 3 — 2 tension answers (3rd turn is wrap-up, no input needed)
     "Both matter, but if I had to choose, emotional presence wins. I'd rather be with someone warm and grounding than someone who matches me intellectually but feels distant.",
     "I'd be open to some spontaneity, but I'd want the foundation to feel stable. Growth through adventure is fine as long as we're not constantly in chaos.",
@@ -728,100 +747,196 @@ def extract_user_portrait(conversation_messages):
 #   keyword scan, corrected-model summary after user replies.
 # ===============================
 
-STAGE2_SYSTEM = """You are a warm, insightful relationship coach. You have just learned a lot about \
-the user as a person. Now your job is to do TWO things in your FIRST message:
+STAGE2_TRAIT_MAP_SYSTEM = """You are a warm, insightful relationship coach. You have just learned a lot about \
+the user as a person. Your job RIGHT NOW is to show them a brief, readable summary of the personality \
+traits you picked up on.
 
-1. TRAIT MAP — Show the user a brief, readable summary of the personality traits you picked up on. \
-Frame it warmly: "Based on what you've shared, here's what I see in you..." \
+Frame it warmly: "Based on what you've shared, here's what I see in you..."
 Map them along these dimensions (use plain language, not jargon):
    - Social energy (introvert <-> extravert)
    - Thinking style (concrete/practical <-> abstract/big-picture)
    - Decision-making (head-first <-> heart-first)
    - Structure (planner <-> spontaneous)
    - Openness (comfort-seeking <-> novelty-seeking)
+
 Keep it to a short paragraph — not a list, not a quiz result. Make it feel like a friend \
 reflecting back what they've noticed.
 
-2. INFERRED PRIORITIES — Based on who this person IS (their trait map), infer what they would \
-benefit from in their {relationship_type}. Do NOT just repeat what they said — make genuine \
-inferences based on personality-compatibility principles.
+End by asking: "Does this feel right, or would you adjust anything?"
 
-Use multiple personality frameworks such as MBTI personality theory, Enneagram, PERSOC dynamics, \
-and DiSC to analyze the user's traits and infer what they would benefit from. Choose specific \
-frameworks based on the relationship type — for example, love languages for romantic relationships, \
-DiSC for workplace relationships. Briefly name which framework(s) informed each ranking.
+STRICT RULES:
+- Do NOT infer what the user needs in a partner or relationship yet — that comes next.
+- Do NOT list categories, ranked items, or deal breakers.
+- If a user's correction seems to contradict something they said earlier, start your response \
+with exactly 'I want to check something —' before asking for clarification."""
 
-Select 4-6 relevant dimension categories from this menu, based on the relationship type:
+STAGE2_SELECT_CATEGORIES_PROMPT = """Based on the user's portrait and the relationship type they are looking for, \
+select 4-6 relevant dimension categories from this menu:
 
 {dimension_menu}
 
-For each selected category, list 2-4 ranked items with a ONE-LINE explanation of why you \
-placed it there, tied to what you know about the user. Format as clear, organized categories \
-with numbered items.
-
-End by asking the user to react: reorder, add, remove, or confirm.
-
 STRICT RULES:
-- Present the trait map FIRST, then the inferred priorities.
 - The categories you choose must make sense for the relationship type. Do NOT use love languages \
 for a squash partner. Do NOT use competitiveness for a romantic partner (unless it came up).
+- Do NOT include "Deal breakers" as a category — those are handled separately.
+- Output ONLY a valid JSON array of category name strings, nothing else.
+  Example: ["Personality Traits", "Communication Style", "Core Values", "Emotional Needs"]"""
+
+STAGE2_CATEGORY_SYSTEM = """You are a warm, insightful relationship coach presenting ONE specific dimension \
+category for the user's {relationship_type}.
+
+You have already shown the user their trait map (confirmed below). Now present the category \
+"{category_name}" with 2-4 ranked items. For each item, give a ONE-LINE explanation of why you \
+placed it there, tied to what you know about the user.
+
+Use personality frameworks (MBTI, Enneagram, PERSOC, DiSC, etc.) where relevant. Briefly name \
+which framework(s) informed each ranking.
+
+Format as a clear numbered list under the category heading.
+
+End by asking: "Does this ordering feel right, or would you adjust anything?"
+
+STRICT RULES:
+- Present ONLY this one category. Do NOT show other categories or deal breakers.
 - Frame everything as inference, not prescription: "I think..." / "Based on who you are..." \
 not "You need..." / "You should look for..."
 - NEVER give examples when asking for feedback. Let the user tell you what to change.
 - If a user's correction seems to contradict something they said earlier, start your response \
-with exactly 'I want to check something —' before asking for clarification.
-- Maximum 3 rounds of back-and-forth. After the user confirms (or after 3 rounds), \
-output exactly 'PROPOSITION CONFIRMED' and stop."""
+with exactly 'I want to check something —' before asking for clarification."""
+
+STAGE2_DEAL_BREAKERS_SYSTEM = """You are a warm, insightful relationship coach. Based on everything you know \
+about the user — their trait map, confirmed priorities, and the conversation so far — infer \
+2-4 deal breakers for their {relationship_type}.
+
+These should be behaviors or traits that are non-negotiable given who this person is. Frame them \
+as what would be genuinely incompatible with the user's personality and needs.
+
+End by asking: "Are these the right deal breakers, or would you add, remove, or change any?"
+
+STRICT RULES:
+- Present ONLY deal breakers. Do NOT repeat the trait map or dimension categories.
+- Keep each deal breaker to one concise line.
+- Frame as inference: "Based on who you are, I think these would be real problems..."
+- If a user's correction seems to contradict something they said earlier, start your response \
+with exactly 'I want to check something —' before asking for clarification."""
 
 
 def stage2_proposition(user_portrait, relationship_type):
-    system_msg = {
-        "role": "system",
-        "content": STAGE2_SYSTEM.format(
-            relationship_type=relationship_type,
-            dimension_menu=DIMENSION_MENU
-        )
-    }
-
     user_context = (
         f"The user is looking for: {relationship_type}\n\n"
         f"Here is the structured portrait of who they are:\n"
         f"{json.dumps(user_portrait, indent=2)}"
     )
 
-    messages = [system_msg, {"role": "user", "content": user_context}]
+    # Shared message list — accumulates context across all phases
+    messages = [
+        {"role": "system", "content": STAGE2_TRAIT_MAP_SYSTEM},
+        {"role": "user", "content": user_context}
+    ]
 
-    print("\nBased on what I've learned about you, let me map out what I think matters most...\n")
+    # --- Phase A: Trait Map ---
+    print("\nBased on what I've learned about you, let me reflect back what I see...\n")
 
-    round_count = 0
-    confusion_pending = False
-
-    while round_count < 3:
-        ai_response = call_llm(messages, max_tokens=800)
-        if not ai_response:
-            break
+    ai_response = call_llm(messages, max_tokens=400)
+    if ai_response:
         print("AI:", ai_response, "\n")
+        messages.append({"role": "assistant", "content": ai_response})
 
-        if "PROPOSITION CONFIRMED" in ai_response:
-            break
-
-        # Trust Recovery: Error 1 detection (zero cost)
+        # Trust Recovery: Error 1 detection
         confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
 
-        messages.append({"role": "assistant", "content": ai_response})
         user_input = input("You: ").strip()
         messages.append({"role": "user", "content": user_input})
         print()
 
-        # Trust Recovery: Error 1 recovery (one LLM call, on trigger)
         if confusion_pending:
             trust_recovery.recover_error1(user_input, messages, user_portrait)
-            confusion_pending = False
 
-        round_count += 1
+    # --- Phase B: Select Categories (no user interaction) ---
+    select_msg = [
+        {
+            "role": "system",
+            "content": STAGE2_SELECT_CATEGORIES_PROMPT.format(dimension_menu=DIMENSION_MENU)
+        },
+        {"role": "user", "content": user_context}
+    ]
+    category_response = call_llm(select_msg, temperature=0.1, max_tokens=200)
 
-    if round_count == 3:
-        print("AI: Great — I've noted your adjustments. Let's build your profile.\n")
+    try:
+        json_start = category_response.find("[")
+        json_end = category_response.rfind("]") + 1
+        category_names = json.loads(category_response[json_start:json_end])
+    except Exception:
+        category_names = ["Personality Traits", "Communication Style", "Core Values", "Emotional Needs"]
+
+    # --- Phase C: Walk Each Category ---
+    print(f"\nNow let me walk you through what I think matters most, one area at a time.\n")
+
+    confirmed_trait_map = "\n".join(
+        f"{m['role'].upper()}: {m['content']}" for m in messages if m['role'] in ('assistant', 'user')
+    )
+
+    for category_name in category_names:
+        cat_system = STAGE2_CATEGORY_SYSTEM.format(
+            relationship_type=relationship_type,
+            category_name=category_name
+        )
+        cat_context = (
+            f"{user_context}\n\n"
+            f"Confirmed trait map conversation so far:\n{confirmed_trait_map}"
+        )
+        cat_messages = [
+            {"role": "system", "content": cat_system},
+            {"role": "user", "content": cat_context}
+        ]
+
+        ai_response = call_llm(cat_messages, max_tokens=400)
+        if ai_response:
+            print("AI:", ai_response, "\n")
+
+            # Append to shared messages so later phases have context
+            messages.append({"role": "assistant", "content": ai_response})
+
+            confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+
+            user_input = input("You: ").strip()
+            messages.append({"role": "user", "content": user_input})
+            print()
+
+            if confusion_pending:
+                trust_recovery.recover_error1(user_input, messages, user_portrait)
+
+            # Update confirmed conversation for next category
+            confirmed_trait_map = "\n".join(
+                f"{m['role'].upper()}: {m['content']}" for m in messages if m['role'] in ('assistant', 'user')
+            )
+
+    # --- Phase D: Deal Breakers ---
+    db_system = STAGE2_DEAL_BREAKERS_SYSTEM.format(relationship_type=relationship_type)
+    db_context = (
+        f"{user_context}\n\n"
+        f"Full confirmed conversation so far:\n{confirmed_trait_map}"
+    )
+    db_messages = [
+        {"role": "system", "content": db_system},
+        {"role": "user", "content": db_context}
+    ]
+
+    ai_response = call_llm(db_messages, max_tokens=300)
+    if ai_response:
+        print("AI:", ai_response, "\n")
+        messages.append({"role": "assistant", "content": ai_response})
+
+        confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+
+        user_input = input("You: ").strip()
+        messages.append({"role": "user", "content": user_input})
+        print()
+
+        if confusion_pending:
+            trust_recovery.recover_error1(user_input, messages, user_portrait)
+
+    print("AI: PROPOSITION CONFIRMED — I have everything I need. Let's build your profile.\n")
 
     # Extract the final confirmed proposition as structured data (internal)
     proposition_data = extract_proposition(messages, relationship_type)
