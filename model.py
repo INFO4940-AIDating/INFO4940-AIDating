@@ -177,7 +177,7 @@ def stage1_intake(relationship_type=""):
 
     print("\nGreat — now let's get to know you a bit better before we build your profile.\n")
     while True:
-        ai_response = call_llm(messages, max_tokens=300)
+        ai_response = call_llm(messages, max_tokens=3000)
         if not ai_response:
             break
         print("AI:", ai_response, "\n")
@@ -239,7 +239,7 @@ def extract_preferences_json(conversation_messages):
         {"role": "user", "content": f"Extract preferences from this conversation:\n{conversation_text}"}
     ]
 
-    response = call_llm(messages, temperature=0.1, max_tokens=600)
+    response = call_llm(messages, temperature=0.1, max_tokens=3000)
 
     try:
         json_start = response.find("{")
@@ -301,7 +301,7 @@ def stage_ranking(preference_json):
     print("\nLet me use what you've shared to map out what matters most to you...\n")
     round_count = 0
     while round_count < 3:
-        ai_response = call_llm(messages, max_tokens=600)
+        ai_response = call_llm(messages, max_tokens=3000)
         if not ai_response:
             break
         print("AI:", ai_response, "\n")
@@ -344,7 +344,7 @@ def stage_ranking(preference_json):
         {"role": "user", "content": conversation_text}
     ]
 
-    ranking_response = call_llm(ranking_extract_msg, temperature=0.1, max_tokens=400)
+    ranking_response = call_llm(ranking_extract_msg, temperature=0.1, max_tokens=5000)
     try:
         json_start = ranking_response.find("{")
         json_end = ranking_response.rfind("}") + 1
@@ -381,7 +381,7 @@ def stage2_tension(preference_json):
     print("\nLet me think through a couple of things with you...\n")
     question_count = 0
     while True:
-        ai_response = call_llm(messages, max_tokens=300)
+        ai_response = call_llm(messages, max_tokens=5000)
         if not ai_response:
             break
         print("AI:", ai_response, "\n")
@@ -438,7 +438,7 @@ def stage3_profile(preference_json):
     })
 
     print("\nGenerating your profile...\n")
-    ai_response = call_llm(messages, max_tokens=1500)
+    ai_response = call_llm(messages, max_tokens=3000)
     if not ai_response:
         return ""
 
@@ -476,7 +476,7 @@ def stage4_refinement(preference_json, profile_text):
         },
         {"role": "user", "content": f"Profile:\n{profile_text}"}
     ]
-    suggestions = call_llm(suggestion_msg, max_tokens=150)
+    suggestions = call_llm(suggestion_msg, max_tokens=3000)
 
     print("What would you like to change? A few things you might consider:")
     print(suggestions if suggestions else "The backstory, the career, or a small quirk that makes the person feel real.")
@@ -508,7 +508,7 @@ def stage4_refinement(preference_json, profile_text):
             )
         })
 
-        ai_response = call_llm(messages, max_tokens=3000)
+        ai_response = call_llm(messages, max_tokens=5000)
         if not ai_response:
             print("AI: Something went wrong. Let's try again.")
             continue

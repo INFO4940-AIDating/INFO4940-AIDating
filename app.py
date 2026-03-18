@@ -791,56 +791,90 @@ def handle_proposition(user_input):
     )
 
     if not st.session_state.trait_map_confirmed:
-        # User just reacted to the trait map — now select categories and show first one
-        with st.spinner("Selecting what matters most..."):
-            # Select categories (no user interaction)
-            select_messages = [
-                {"role": "system", "content": get_select_categories_prompt()},
-                {"role": "user", "content": user_context_text}
-            ]
-            category_response = call_llm(select_messages, temperature=0.1, max_tokens=200)
+        # User just reacted to the trait map — check if confirming or giving feedback
+        acceptance_keywords = {
+            "yes", "yeah", "yep", "looks good", "that's right", "correct", "good",
+            "perfect", "spot on", "exactly", "sure", "ok", "okay", "that's it",
+            "all good", "looks right", "looks great", "no changes", "fine", "done"
+        }
+        user_is_confirming = user_input.lower().strip() in acceptance_keywords
 
-            try:
-                json_start = category_response.find("[")
-                json_end = category_response.rfind("]") + 1
-                st.session_state.proposition_categories = json.loads(category_response[json_start:json_end])
-            except Exception:
-                st.session_state.proposition_categories = ["Personality Traits", "Communication Style", "Core Values", "Emotional Needs"]
-
-            transition = "Now let me walk you through what I think matters most, one area at a time."
-            st.session_state.messages.append({"role": "assistant", "content": transition})
-
-            # Generate first category
-            category_name = st.session_state.proposition_categories[0]
+        if not user_is_confirming:
+            # User gave feedback on the trait map — re-generate it with their correction
             confirmed_text = _get_proposition_conversation_text()
-            cat_messages = [
-                {"role": "system", "content": get_category_system_prompt(st.session_state.relationship_type, category_name)},
-                {"role": "user", "content": f"{user_context_text}\n\nConfirmed trait map conversation so far:\n{confirmed_text}"}
+            trait_messages = [
+                {"role": "system", "content": get_trait_map_system_prompt()},
+                {"role": "user", "content": user_context_text},
+                {"role": "assistant", "content": st.session_state.stage_messages[-2]["content"] if len(st.session_state.stage_messages) >= 2 else ""},
+                {"role": "user", "content": f"The user wants to adjust the trait map: {user_input}\n\nPlease re-present the trait map with the user's corrections applied."}
             ]
-            ai_response = call_llm(cat_messages, max_tokens=400)
 
-        if ai_response:
-            st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
-            st.session_state.messages.append({"role": "assistant", "content": ai_response})
-            st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+            with st.spinner("Updating trait map..."):
+                ai_response = call_llm(trait_messages, max_tokens=400)
 
-        st.session_state.trait_map_confirmed = True
-        st.session_state.current_category_index = 0
+            if ai_response:
+                st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
+                st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+            # Stay in trait_map_confirmed = False so user can confirm or give more feedback
+        else:
+            # User confirmed trait map — select categories and show first one
+            with st.spinner("Selecting what matters most..."):
+                # Select categories (no user interaction)
+                select_messages = [
+                    {"role": "system", "content": get_select_categories_prompt()},
+                    {"role": "user", "content": user_context_text}
+                ]
+                category_response = call_llm(select_messages, temperature=0.1, max_tokens=200)
+
+                try:
+                    json_start = category_response.find("[")
+                    json_end = category_response.rfind("]") + 1
+                    st.session_state.proposition_categories = json.loads(category_response[json_start:json_end])
+                except Exception:
+                    st.session_state.proposition_categories = ["Personality Traits", "Communication Style", "Core Values", "Emotional Needs"]
+
+                transition = "Now let me walk you through what I think matters most, one area at a time."
+                st.session_state.messages.append({"role": "assistant", "content": transition})
+
+                # Generate first category
+                category_name = st.session_state.proposition_categories[0]
+                confirmed_text = _get_proposition_conversation_text()
+                cat_messages = [
+                    {"role": "system", "content": get_category_system_prompt(st.session_state.relationship_type, category_name)},
+                    {"role": "user", "content": f"{user_context_text}\n\nConfirmed trait map conversation so far:\n{confirmed_text}"}
+                ]
+                ai_response = call_llm(cat_messages, max_tokens=400)
+
+            if ai_response:
+                st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
+                st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+
+            st.session_state.trait_map_confirmed = True
+            st.session_state.current_category_index = 0
 
     elif st.session_state.current_category_index < len(st.session_state.proposition_categories):
-        # User just reacted to a category — advance to next category or deal breakers
-        st.session_state.current_category_index += 1
+        # User just reacted to a category — check if confirming or giving feedback
+        acceptance_keywords = {
+            "yes", "yeah", "yep", "looks good", "that's right", "correct", "good",
+            "perfect", "spot on", "exactly", "sure", "ok", "okay", "that's it",
+            "all good", "looks right", "looks great", "no changes", "fine", "done"
+        }
+        user_is_confirming = user_input.lower().strip() in acceptance_keywords
 
-        if st.session_state.current_category_index < len(st.session_state.proposition_categories):
-            # More categories to show
+        if not user_is_confirming:
+            # User gave feedback — re-generate the SAME category with their correction
             category_name = st.session_state.proposition_categories[st.session_state.current_category_index]
             confirmed_text = _get_proposition_conversation_text()
             cat_messages = [
                 {"role": "system", "content": get_category_system_prompt(st.session_state.relationship_type, category_name)},
-                {"role": "user", "content": f"{user_context_text}\n\nConfirmed conversation so far:\n{confirmed_text}"}
+                {"role": "user", "content": f"{user_context_text}\n\nConversation so far:\n{confirmed_text}"},
+                {"role": "assistant", "content": st.session_state.stage_messages[-2]["content"] if len(st.session_state.stage_messages) >= 2 else ""},
+                {"role": "user", "content": f"The user wants to adjust this ranking: {user_input}\n\nPlease re-present this category with the user's corrections applied."}
             ]
 
-            with st.spinner("Thinking..."):
+            with st.spinner("Updating ranking..."):
                 ai_response = call_llm(cat_messages, max_tokens=400)
 
             if ai_response:
@@ -848,38 +882,85 @@ def handle_proposition(user_input):
                 st.session_state.messages.append({"role": "assistant", "content": ai_response})
                 st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
         else:
-            # All categories done — show deal breakers
+            # User confirmed — advance to next category or deal breakers
+            st.session_state.current_category_index += 1
+
+            if st.session_state.current_category_index < len(st.session_state.proposition_categories):
+                # More categories to show
+                category_name = st.session_state.proposition_categories[st.session_state.current_category_index]
+                confirmed_text = _get_proposition_conversation_text()
+                cat_messages = [
+                    {"role": "system", "content": get_category_system_prompt(st.session_state.relationship_type, category_name)},
+                    {"role": "user", "content": f"{user_context_text}\n\nConfirmed conversation so far:\n{confirmed_text}"}
+                ]
+
+                with st.spinner("Thinking..."):
+                    ai_response = call_llm(cat_messages, max_tokens=400)
+
+                if ai_response:
+                    st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
+                    st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                    st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+            else:
+                # All categories done — show deal breakers
+                confirmed_text = _get_proposition_conversation_text()
+                db_messages = [
+                    {"role": "system", "content": get_deal_breakers_system_prompt(st.session_state.relationship_type)},
+                    {"role": "user", "content": f"{user_context_text}\n\nFull confirmed conversation so far:\n{confirmed_text}"}
+                ]
+
+                with st.spinner("Thinking about deal breakers..."):
+                    ai_response = call_llm(db_messages, max_tokens=300)
+
+                if ai_response:
+                    st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
+                    st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                    st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+
+                st.session_state.awaiting_deal_breakers = True
+
+    elif st.session_state.awaiting_deal_breakers:
+        # User just reacted to deal breakers — check if confirming or giving feedback
+        acceptance_keywords = {
+            "yes", "yeah", "yep", "looks good", "that's right", "correct", "good",
+            "perfect", "spot on", "exactly", "sure", "ok", "okay", "that's it",
+            "all good", "looks right", "looks great", "no changes", "fine", "done"
+        }
+        user_is_confirming = user_input.lower().strip() in acceptance_keywords
+
+        if not user_is_confirming:
+            # User gave feedback on deal breakers — re-generate with their correction
             confirmed_text = _get_proposition_conversation_text()
             db_messages = [
                 {"role": "system", "content": get_deal_breakers_system_prompt(st.session_state.relationship_type)},
-                {"role": "user", "content": f"{user_context_text}\n\nFull confirmed conversation so far:\n{confirmed_text}"}
+                {"role": "user", "content": f"{user_context_text}\n\nFull confirmed conversation so far:\n{confirmed_text}"},
+                {"role": "assistant", "content": st.session_state.stage_messages[-2]["content"] if len(st.session_state.stage_messages) >= 2 else ""},
+                {"role": "user", "content": f"The user wants to adjust the deal breakers: {user_input}\n\nPlease re-present the deal breakers with the user's corrections applied."}
             ]
 
-            with st.spinner("Thinking about deal breakers..."):
+            with st.spinner("Updating deal breakers..."):
                 ai_response = call_llm(db_messages, max_tokens=300)
 
             if ai_response:
                 st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
                 st.session_state.messages.append({"role": "assistant", "content": ai_response})
                 st.session_state.confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+            # Stay in awaiting_deal_breakers = True so user can confirm or give more feedback
+        else:
+            # User confirmed deal breakers — extract proposition and advance
+            st.session_state.awaiting_deal_breakers = False
+            st.session_state.deal_breakers_confirmed = True
 
-            st.session_state.awaiting_deal_breakers = True
+            confirmed_msg = "Great — I have everything I need. Let's build your profile."
+            st.session_state.messages.append({"role": "assistant", "content": confirmed_msg})
 
-    elif st.session_state.awaiting_deal_breakers:
-        # User just reacted to deal breakers — extract proposition and advance
-        st.session_state.awaiting_deal_breakers = False
-        st.session_state.deal_breakers_confirmed = True
-
-        confirmed_msg = "Great — I have everything I need. Let's build your profile."
-        st.session_state.messages.append({"role": "assistant", "content": confirmed_msg})
-
-        with st.spinner("Finalizing priorities..."):
-            st.session_state.proposition_data = extract_proposition(
-                st.session_state.stage_messages,
-                st.session_state.relationship_type
-            )
-        advance_stage()
-        start_tension_stage()
+            with st.spinner("Finalizing priorities..."):
+                st.session_state.proposition_data = extract_proposition(
+                    st.session_state.stage_messages,
+                    st.session_state.relationship_type
+                )
+            advance_stage()
+            start_tension_stage()
 
 def start_tension_stage():
     system_msg = {"role": "system", "content": TENSION_SYSTEM_PROMPT}
@@ -1159,7 +1240,7 @@ def main():
                 st.rerun()
 
     elif st.session_state.stage == "proposition":
-        if user_input := st.chat_input("Your response..."):
+        if user_input := st.chat_input("Type 'yes' to confirm, or suggest changes..."):
             handle_proposition(user_input)
             st.rerun()
 
