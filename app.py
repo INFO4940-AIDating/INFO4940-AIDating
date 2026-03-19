@@ -1323,7 +1323,6 @@ def main():
             with st.spinner("Thinking..."):
                 response = f"Great choice! Let's explore what makes a great {user_input.lower() if user_input else 'connection'} for you. First, I'll get to know you as a person."
                 st.session_state.messages.append({"role": "assistant", "content": response})
-                advance_stage()
                 system_msg = {"role": "system", "content": get_about_you_system_prompt(st.session_state.relationship_type)}
                 initial_user = {"role": "user", "content": f"Hi — I'm looking for: {st.session_state.relationship_type}"}
                 st.session_state.stage_messages = [system_msg, initial_user]
@@ -1333,6 +1332,9 @@ def main():
                     ai_response = TrustRecoverySystem.strip_recovery_tag(ai_response)
                     st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
                     st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                    advance_stage()
+                else:
+                    st.session_state.messages.append({"role": "assistant", "content": "Sorry, I had trouble thinking of a response. Could you try again?"})
             st.rerun()
 
     elif st.session_state.stage == "about_you":
