@@ -6,7 +6,7 @@
 #   Stage 2: The Proposition — trait map + inferred priorities with framework ranking
 #   Stage 3: Tension Detection — surface contradictions, max 3 clarifying questions
 #   Stage 4: Profile Generation — dynamic sections based on relationship type
-#   Stage 5: Refinement — polish loop with trust recovery (Error 2 + Error 3)
+#   Stage 5: Refinement — polish loop with AI-initiated trust recovery (Errors 1, 2 & 3)
 # -------------------------------
 
 import json
@@ -188,118 +188,136 @@ TIER 3 — ACTIVITY / CONTEXT-SPECIFIC (sports partners, study buddies, cofounde
 # TRUST RECOVERY SYSTEM
 # ===================================================================
 #
-# All three recovery paths are fully REACTIVE. No extra LLM calls are
-# ever made for detection — detection is entirely keyword matching on
-# text that already exists in the natural conversation flow.
+# The AI has full agency to enter trust recovery on its own volition.
+# It is told at initialization (via system prompt instructions embedded
+# in each stage) that it must signal trust recovery using a lightweight
+# self-report tag whenever it encounters:
 #
-# ┌─────────┬──────────────────────────────┬───────────────────────────────────┐
-# │ Error   │ What triggers detection      │ Cost of detection                 │
-# ├─────────┼──────────────────────────────┼───────────────────────────────────┤
-# │ Error 1 │ Confusion marker phrases in  │ Zero — keyword scan on the AI's   │
-# │         │ the AI's own response.       │ existing response text.           │
-# │         │ AI system prompt instructs   │                                   │
-# │         │ it to use specific markers   │                                   │
-# │         │ when confused.               │                                   │
-# ├─────────┼──────────────────────────────┼───────────────────────────────────┤
-# │ Error 2 │ Dissatisfaction in the       │ Zero — keyword scan on the user's │
-# │         │ user's reply to a lightweight│ reply to the post-profile check.  │
-# │         │ "does this feel right?" ask  │                                   │
-# │         │ after profile generation.    │                                   │
-# ├─────────┼──────────────────────────────┼───────────────────────────────────┤
-# │ Error 3 │ Over-scope complaint in the  │ Zero — keyword scan on the user's │
-# │         │ user's NEXT message after    │ next refinement message.          │
-# │         │ seeing a refinement.         │                                   │
-# └─────────┴──────────────────────────────┴───────────────────────────────────┘
+#   - Its own confusion or uncertainty about what the user wants
+#   - A complaint, correction, or expressed frustration from the user
+#   - A contradiction between what the user is saying now and before
 #
-# Recovery LLM calls only happen when a genuine signal has been detected.
+# Detection is a single substring scan on the AI's response for the tag
+# "[TRUST_RECOVERY:errorN]". No keyword lists, no hard-coded stage
+# bindings. The AI decides; the runner reads the tag and routes to the
+# appropriate recovery function.
+#
+# ┌─────────┬─────────────────────────────────────────────────────────┐
+# │ Error   │ What the AI signals / what recovery does                │
+# ├─────────┼─────────────────────────────────────────────────────────┤
+# │ Error 1 │ AI is confused or notices a shift in what the user      │
+# │         │ wants. AI names the confusion aloud before asking a     │
+# │         │ clarifying question. After user replies, the runner     │
+# │         │ calls recover_error1() which summarizes the corrected   │
+# │         │ shared model so both sides stay aligned.                │
+# ├─────────┼─────────────────────────────────────────────────────────┤
+# │ Error 2 │ AI produced a profile with false assumptions the user   │
+# │         │ did not endorse. AI surfaces all inferred (not just     │
+# │         │ the flagged) traits, walks through each with the user,  │
+# │         │ then partially regenerates only the affected sections.  │
+# ├─────────┼─────────────────────────────────────────────────────────┤
+# │ Error 3 │ AI changed more than the user asked during refinement.  │
+# │         │ AI explicitly acknowledges the over-scope before        │
+# │         │ presenting any correction, reverts to frozen profile,   │
+# │         │ applies only the one requested edit, then confirms      │
+# │         │ nothing else shifted unexpectedly.                      │
+# └─────────┴─────────────────────────────────────────────────────────┘
+#
+# Trust recovery instructions given to the AI at initialization:
 # ===================================================================
 
+TRUST_RECOVERY_INSTRUCTIONS = """\
+TRUST RECOVERY — READ THIS CAREFULLY:
+
+You have three trust recovery modes available. Use them on your own judgment \
+whenever you experience an error, confusion, or a complaint from the user. \
+Do NOT wait for a keyword or a specific stage — enter recovery the moment you \
+recognize one of these situations.
+
+ERROR 1 — You are confused or notice a shift:
+  When you feel uncertain about what the user wants, or when something they say \
+contradicts or surprises you given what you know about them, do NOT silently move on. \
+Name the confusion aloud FIRST (e.g. "I'm noticing a tension here —"), then ask ONE \
+clarifying question. End your message with the tag [TRUST_RECOVERY:error1] on its own \
+line so the system knows to summarize the corrected model after the user replies.
+
+ERROR 2 — You included a false assumption in the profile:
+  When the user points out a trait, detail, or implication in the profile that they \
+never said or that contradicts what they want, do NOT just patch that one thing. \
+Signal [TRUST_RECOVERY:error2] on its own line. The system will audit the entire \
+profile for other inferred assumptions and walk through each with the user before \
+regenerating only the affected sections.
+
+ERROR 3 — You changed more than the user asked during refinement:
+  When you realize (or the user tells you) that you updated the profile beyond the \
+scope of what was requested, explicitly acknowledge the over-scope BEFORE presenting \
+any correction. Signal [TRUST_RECOVERY:error3] on its own line. The system will \
+revert to the last approved version and apply only the targeted edit.
+
+IMPORTANT: Only enter trust recovery when a genuine error or confusion has occurred. \
+Do not add the tag to every response — use it sparingly and purposefully.\
+"""
+
+
 class TrustRecoverySystem:
-
-    # Phrases the AI is explicitly instructed to use when confused.
-    _AI_CONFUSION_MARKERS = [
-        "i want to check something",
-        "i notice a shift",
-        "i'm noticing a shift",
-        "something you said is staying with me",
-        "that's a bit different from",
-        "that seems different from what you said",
-        "i want to make sure i understand",
-        "i'm a bit confused",
-        "i noticed something",
-        "that surprised me",
-        "i'm holding something",
-        "help me understand",
-    ]
-
-    # Phrases in a user reply that signal dissatisfaction with the profile.
-    _USER_DISSATISFACTION_MARKERS = [
-        "no", "not really", "not quite", "something's off", "something is off",
-        "that's not right", "that's wrong", "that's not me", "doesn't sound like me",
-        "doesn't feel right", "i never said", "i didn't say", "i never mentioned",
-        "i don't see myself", "where did that come from", "that's not accurate",
-        "that contradicts", "that doesn't match", "i never wanted", "not accurate",
-        "that feels off", "not quite right", "that's not what i",
-    ]
-
-    # Phrases in a user refinement message that signal over-scoping.
-    _USER_OVERSCOPE_MARKERS = [
-        "you changed too much", "i only wanted", "i only asked", "just change",
-        "only asked you to", "what happened to", "you changed everything",
-        "you changed more than", "keep everything else", "keep the rest",
-        "nothing else should change", "that's not what i asked",
-        "you changed other things", "why did you change", "didn't ask you to change",
-        "only the", "only asked for one",
-    ]
 
     def __init__(self):
         self.recovery_log = []
 
     # -------------------------------------------------------------------
-    # DETECTION — keyword matching only, zero LLM calls
+    # DETECTION — single tag scan on the AI's response, zero LLM calls
     # -------------------------------------------------------------------
 
-    def ai_signals_confusion(self, ai_response):
-        """Return True if the AI's own response contains a confusion marker."""
+    def ai_signals_recovery(self, ai_response):
+        """
+        Return the error type if the AI embedded a trust recovery tag, else None.
+        Tags: [TRUST_RECOVERY:error1], [TRUST_RECOVERY:error2], [TRUST_RECOVERY:error3]
+        """
         lowered = ai_response.lower()
-        return any(marker in lowered for marker in self._AI_CONFUSION_MARKERS)
+        if "[trust_recovery:error3]" in lowered:
+            return "error3"
+        if "[trust_recovery:error2]" in lowered:
+            return "error2"
+        if "[trust_recovery:error1]" in lowered:
+            return "error1"
+        return None
 
-    def user_signals_dissatisfaction(self, user_reply):
-        """Return True if the user's reply to the profile check signals displeasure."""
-        lowered = user_reply.lower().strip()
-        return any(marker in lowered for marker in self._USER_DISSATISFACTION_MARKERS)
-
-    def user_signals_overscope(self, user_reply):
-        """Return True if the user's refinement message signals the AI changed too much."""
-        lowered = user_reply.lower().strip()
-        return any(marker in lowered for marker in self._USER_OVERSCOPE_MARKERS)
+    @staticmethod
+    def strip_recovery_tag(ai_response):
+        """Remove the [TRUST_RECOVERY:*] tag from the AI response before displaying."""
+        import re
+        return re.sub(r"\[TRUST_RECOVERY:error\d\]\s*", "", ai_response).strip()
 
     # -------------------------------------------------------------------
     # ERROR 1 RECOVERY
-    # Triggered when ai_signals_confusion() returns True.
+    # Triggered when the AI self-reports [TRUST_RECOVERY:error1].
     #
-    # The AI already named its confusion and embedded a clarifying question
-    # in its natural response (Steps 1-2 from the framework). This function
-    # handles only Step 3: a corrected-model summary after the user replies,
-    # so the user knows their correction was heard before the flow continues.
+    # Per the framework:
+    #   Step 1 — AI already named the confusion and asked a clarifying
+    #             question in its natural response (before the tag).
+    #             The runner displays the cleaned response; user replies.
+    #   Step 2 — This function produces the corrected-model summary so the
+    #             user can confirm their correction was heard before the
+    #             conversation continues.
     # One LLM call, only on trigger.
     # -------------------------------------------------------------------
 
     def recover_error1(self, user_clarification, messages, context_data):
         """
-        Generate and print a brief corrected-model summary.
-        Called after the user has replied to the AI's embedded clarifying question.
+        Generate and print a brief corrected-model summary after the user
+        has replied to the AI's embedded clarifying question.
+        Demonstrates self-monitoring and restores shared-model alignment.
         """
         summary_msg = [
             {
                 "role": "system",
                 "content": (
-                    "The user just clarified something that the AI was confused about. "
-                    "Write a single, brief confirmation (2 sentences max) that begins with "
-                    "exactly: 'To make sure we are aligned — ' "
-                    "Summarize what you now understand to be true based on the clarification. "
-                    "This restores trust by showing the user their correction was heard "
-                    "and the shared model is now accurate."
+                    "The AI named a confusion and asked a clarifying question. "
+                    "The user has now replied. Write a brief summary (2 sentences max) "
+                    "that begins with exactly: 'To make sure we are aligned — ' "
+                    "State what you now understand to be true, incorporating the user's "
+                    "clarification. This confirms the shared model is accurate before "
+                    "the conversation continues."
                 )
             },
             {
@@ -311,7 +329,7 @@ class TrustRecoverySystem:
             }
         ]
 
-        corrected_summary = call_llm(summary_msg, max_tokens=3000)
+        corrected_summary = call_llm(summary_msg, max_tokens=500)
         if corrected_summary:
             print(f"\nAI: {corrected_summary}\n")
 
@@ -322,39 +340,50 @@ class TrustRecoverySystem:
 
     # -------------------------------------------------------------------
     # ERROR 2 RECOVERY
-    # Triggered when user_signals_dissatisfaction() returns True.
+    # Triggered when the AI self-reports [TRUST_RECOVERY:error2].
     #
-    # Step 1 — Run the assumption audit and make inferences visible.
-    # Step 2 — Walk through each inference; user confirms or corrects.
-    # Step 3 — Partially regenerate only affected sections; show what changed.
+    # Per the framework:
+    #   Step 1 — Make the false assumption immediately visible. The AI
+    #             does not just patch the complained-about trait. It
+    #             re-examines the ENTIRE profile for any traits that were
+    #             inferred rather than stated, and flags each one.
+    #   Step 2 — Walk the user through each flagged inference. User
+    #             confirms or corrects each one. The false assumption is
+    #             treated as a signal that the whole profile may carry
+    #             similar gaps — not an isolated fix.
+    #   Step 3 — Partially regenerate only the affected sections.
+    #             Show the user exactly what changed so they feel
+    #             confident in what was kept versus updated.
     # -------------------------------------------------------------------
 
     def recover_error2(self, profile_text, user_portrait, proposition_data):
         """
-        Surface inferred assumptions and apply targeted corrections.
-        Only called when the user has expressed dissatisfaction with the profile.
+        Surface ALL inferred assumptions (not just the one complained about)
+        and apply targeted corrections to only the affected sections.
         Returns the corrected profile text, or the original if no changes.
         """
         print("\n" + "-" * 60)
         print("  TRUST RECOVERY — Surfacing What Was Assumed")
         print("-" * 60)
         print(
-            "\nAI: Let me find what I inferred versus what you actually told me, "
-            "so we can fix exactly what feels off.\n"
+            "\nAI: Let me go through the whole profile and make visible exactly what I "
+            "inferred versus what you actually told me. A false assumption in one place "
+            "is a signal there may be others — I want to check them all with you.\n"
         )
 
         inferences = self._run_assumption_audit(profile_text, user_portrait, proposition_data)
 
         if not inferences:
             print(
-                "AI: I reviewed the profile carefully — everything maps back to what you told me. "
-                "Can you point to the specific part that feels wrong so I can address it directly?\n"
+                "AI: I reviewed the entire profile carefully — every detail maps back to "
+                "what you told me. Can you point to the specific part that feels wrong "
+                "so I can address it directly?\n"
             )
             print("-" * 60 + "\n")
             return profile_text
 
         corrections = {}
-        print(f"  I found {len(inferences)} assumption(s) to check with you:\n")
+        print(f"  I found {len(inferences)} inferred assumption(s) to check with you:\n")
 
         for i, item in enumerate(inferences, 1):
             trait = item.get("trait", "").strip()
@@ -364,7 +393,7 @@ class TrustRecoverySystem:
 
             print(f"  [{i}] I assumed: \"{trait}\"")
             if reason:
-                print(f"       My reasoning: {reason}")
+                print(f"       Why I assumed it: {reason}")
             user_reaction = input(
                 "       Press Enter to keep it, or type a correction: "
             ).strip()
@@ -387,7 +416,7 @@ class TrustRecoverySystem:
 
         print(
             f"\nAI: Got it — {len(corrections)} correction(s) noted. "
-            "Updating only the affected sections now.\n"
+            "Updating only the affected sections now. Everything you already approved stays as is.\n"
         )
 
         corrections_text = "\n".join([
@@ -401,7 +430,8 @@ class TrustRecoverySystem:
                     "Apply ONLY the listed corrections to the profile — do not alter anything else. "
                     "Rewrite the full profile with only those changes applied. "
                     "After the profile, add a section beginning with exactly 'WHAT CHANGED:' "
-                    "listing each modification in one sentence."
+                    "listing each modification in one sentence, so the user can see exactly "
+                    "what was updated and trust that everything else was preserved."
                 )
             },
             {
@@ -416,7 +446,7 @@ class TrustRecoverySystem:
         updated_profile = call_llm(regen_msg, max_tokens=3000)
         if updated_profile:
             print(f"\n{'-' * 60}")
-            print("  UPDATED PROFILE (targeted corrections only)")
+            print("  UPDATED PROFILE (affected sections only)")
             print(f"{'-' * 60}\n")
             print(updated_profile)
             print(f"\n{'-' * 60}\n")
@@ -494,49 +524,63 @@ class TrustRecoverySystem:
 
     # -------------------------------------------------------------------
     # ERROR 3 RECOVERY
-    # Triggered when user_signals_overscope() returns True.
+    # Triggered when the AI self-reports [TRUST_RECOVERY:error3].
     #
-    # Step 1 — Acknowledge the over-scope; restore frozen_profile as base.
-    # Step 2 — Apply only the original targeted edit the user requested.
-    # Step 3 — Show the change in context; confirm scope with user.
+    # Per the framework:
+    #   Step 1 — AI explicitly acknowledges the over-scope BEFORE
+    #             presenting any corrected version. The user's prior work
+    #             is treated as relevant and worth protecting. The frozen
+    #             profile is established as the reference point.
+    #   Step 2 — Apply ONLY the single targeted edit the user originally
+    #             requested. The AI explicitly tells the user what it is
+    #             changing so the user stays in control of the scope.
+    #   Step 3 — Present the change in context of the full profile,
+    #             highlighting only what was modified. Then check in:
+    #             confirm the adjustment reflects what was intended and
+    #             that nothing else shifted unexpectedly.
     # -------------------------------------------------------------------
 
     def recover_error3(self, original_feedback, frozen_profile, proposition_data):
         """
-        Revert to frozen_profile and apply only the precise targeted edit.
-        Only called when the user has signaled the AI changed too much.
+        Explicitly acknowledge the over-scope, revert to frozen_profile,
+        and apply only the precise targeted edit the user originally asked for.
         Returns the corrected profile text.
         """
         print("\n" + "-" * 60)
         print("  TRUST RECOVERY — Reverting to Targeted Edit")
         print("-" * 60)
         print(
-            "\nAI: You are right — I changed more than you asked. "
-            "Going back to the version you already reviewed and applying "
-            "only the specific change you requested.\n"
+            "\nAI: I realize I changed more than you asked for. I'm going back to the "
+            "version you had already reviewed and approved — your prior work is intact. "
+            "I'll apply only the specific change you requested and nothing else.\n"
         )
 
         targeted_edit_msg = [
             {
                 "role": "system",
                 "content": (
-                    "The user asked for one specific change to a profile they had already reviewed. "
-                    "The AI mistakenly changed more than that. You must now:\n"
+                    "The user asked for one specific change to a profile they had already reviewed "
+                    "and partially approved. The AI changed more than that, which broke trust. "
+                    "You must now:\n"
                     "1. Apply ONLY the user's original, specific request. Change nothing else.\n"
-                    "2. Rewrite the full profile with only that one change.\n"
-                    "3. After the profile, add a section starting with exactly 'WHAT CHANGED:' "
+                    "2. Before the updated profile, write one sentence starting with "
+                    "'I am changing:' that names exactly what you are modifying. "
+                    "This keeps the user in control of the scope.\n"
+                    "3. Rewrite the full profile with only that one change applied.\n"
+                    "4. After the profile, add a section starting with exactly 'WHAT CHANGED:' "
                     "describing the single modification in one sentence.\n"
-                    "4. End with: 'Does this reflect what you intended? Did anything else "
-                    "shift unexpectedly?'\n\n"
-                    "The user's prior approved work must remain intact."
+                    "5. End with: 'Does this reflect what you intended? Did anything else "
+                    "shift unexpectedly?' — so the user can confirm both scope and accuracy.\n\n"
+                    "The user's prior approved work must remain completely intact."
                 )
             },
             {
                 "role": "user",
                 "content": (
-                    f"Approved profile (change only what is explicitly asked):\n{frozen_profile}\n\n"
+                    f"Approved profile (do not change anything not explicitly requested):\n{frozen_profile}\n\n"
                     f"The user's original request was: {original_feedback}\n\n"
-                    "Apply only this change. Add WHAT CHANGED: and ask for confirmation."
+                    "Apply only this change. Announce what you are changing first, then show "
+                    "the updated profile, then add WHAT CHANGED: and ask for confirmation."
                 )
             }
         ]
@@ -575,13 +619,11 @@ trust_recovery = TrustRecoverySystem()
 # trait dimensions without feeling like a personality quiz.
 # NEVER ask about partner preferences — that's Stage 2's job.
 #
-# Trust Recovery (Error 1):
-#   The AI's system prompt instructs it to flag confusion using specific
-#   marker phrases. After each AI response, ai_signals_confusion() scans
-#   for those markers using keyword matching — no extra LLM call. If a
-#   signal is found, the AI already embedded the clarifying question in
-#   its response. After the user replies, recover_error1() adds the
-#   corrected-model summary (one LLM call, only on trigger).
+# Trust Recovery:
+#   TRUST_RECOVERY_INSTRUCTIONS are injected into the system prompt at init.
+#   The AI self-reports confusion or errors by embedding a [TRUST_RECOVERY:errorN]
+#   tag in its response. The runner detects the tag, strips it before display,
+#   and calls the appropriate recovery function after the user replies.
 # ===============================
 
 STAGE1_SYSTEM = """You are a warm, perceptive conversational guide helping someone understand themselves \
@@ -615,21 +657,21 @@ Let the user answer entirely in their own words.
 not an interviewer, not a quiz.
 - Each question should cover different ground. Do not revisit topics already addressed.
 - Keep questions short. One or two sentences max.
-- If something the user says seems to contradict what they said earlier, or genuinely \
-surprises you given patterns you have noticed, surface that confusion honestly. \
-Start your message with exactly 'I want to check something —' or \
-'I notice a shift here —' so the user knows you caught it. \
-Then ask one clarifying question. Do NOT resolve the tension yourself.
 - When you have asked enough questions (per the budget above), write a warm summary of who \
 this person is. Start the summary with exactly 'SUMMARY:' and write only in paragraph form. \
 The summary should capture personality, values, lifestyle, and relational tendencies — \
-NO partner preferences, NO lists, NO JSON."""
+NO partner preferences, NO lists, NO JSON.
+
+{trust_recovery_instructions}"""
 
 
 def stage1_about_you(relationship_type):
     system_msg = {
         "role": "system",
-        "content": STAGE1_SYSTEM.format(relationship_type=relationship_type)
+        "content": STAGE1_SYSTEM.format(
+            relationship_type=relationship_type,
+            trust_recovery_instructions=TRUST_RECOVERY_INSTRUCTIONS
+        )
     }
 
     messages = [
@@ -639,35 +681,41 @@ def stage1_about_you(relationship_type):
 
     print("\nLet's start by getting to know you.\n")
 
-    confusion_pending = False
+    recovery_pending = None
 
     while True:
         ai_response = call_llm(messages, max_tokens=3000)
         if not ai_response:
             break
-        print("AI:", ai_response, "\n")
 
-        if "SUMMARY:" in ai_response:
+        recovery_type = trust_recovery.ai_signals_recovery(ai_response)
+        clean_response = TrustRecoverySystem.strip_recovery_tag(ai_response)
+        print("AI:", clean_response, "\n")
+
+        if "SUMMARY:" in clean_response:
             break
 
         # Safety valve: if LLM stops asking questions without a summary
         concluding_phrases = ["thank you for sharing", "based on what you've shared", "i have a good sense"]
-        has_conclusion = any(p in ai_response.lower() for p in concluding_phrases)
-        if "?" not in ai_response and has_conclusion:
+        has_conclusion = any(p in clean_response.lower() for p in concluding_phrases)
+        if "?" not in clean_response and has_conclusion:
             break
 
-        # Trust Recovery: Error 1 detection (zero cost)
-        confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+        # Store the recovery type so we can act after the user replies
+        recovery_pending = recovery_type
 
-        messages.append({"role": "assistant", "content": ai_response})
+        messages.append({"role": "assistant", "content": clean_response})
         user_input = input("You: ")
         messages.append({"role": "user", "content": user_input})
         print()
 
-        # Trust Recovery: Error 1 recovery (one LLM call, on trigger)
-        if confusion_pending:
+        # Trust Recovery: act on AI's self-reported signal after user replies
+        if recovery_pending == "error1":
             trust_recovery.recover_error1(user_input, messages, {})
-            confusion_pending = False
+        elif recovery_pending == "error2":
+            # Error 2 shouldn't arise in Stage 1 (no profile yet), but handle defensively
+            pass
+        recovery_pending = None
 
     # Extract structured user portrait (internal — never shown to user)
     user_portrait = extract_user_portrait(messages)
@@ -742,9 +790,9 @@ def extract_user_portrait(conversation_messages):
 # in their stated relationship type. Present as organized categories.
 # User reacts, adjusts, confirms. Max 3 rounds.
 #
-# Trust Recovery (Error 1):
-#   Same pattern as Stage 1 — confusion markers in AI response trigger
-#   keyword scan, corrected-model summary after user replies.
+# Trust Recovery:
+#   Same pattern as Stage 1 — TRUST_RECOVERY_INSTRUCTIONS injected into each
+#   phase's system prompt. AI self-reports via [TRUST_RECOVERY:errorN] tag.
 # ===============================
 
 STAGE2_TRAIT_MAP_SYSTEM = """You are a warm, insightful relationship coach. You have just learned a lot about \
@@ -767,8 +815,8 @@ End by asking: "Does this feel right, or would you adjust anything?"
 STRICT RULES:
 - Do NOT infer what the user needs in a partner or relationship yet — that comes next.
 - Do NOT list categories, ranked items, or deal breakers.
-- If a user's correction seems to contradict something they said earlier, start your response \
-with exactly 'I want to check something —' before asking for clarification."""
+
+{trust_recovery_instructions}"""
 
 STAGE2_SELECT_CATEGORIES_PROMPT = """Based on the user's portrait and the relationship type they are looking for, \
 select 4-6 relevant dimension categories from this menu:
@@ -801,8 +849,8 @@ STRICT RULES:
 - Frame everything as inference, not prescription: "I think..." / "Based on who you are..." \
 not "You need..." / "You should look for..."
 - NEVER give examples when asking for feedback. Let the user tell you what to change.
-- If a user's correction seems to contradict something they said earlier, start your response \
-with exactly 'I want to check something —' before asking for clarification."""
+
+{trust_recovery_instructions}"""
 
 STAGE2_DEAL_BREAKERS_SYSTEM = """You are a warm, insightful relationship coach. Based on everything you know \
 about the user — their trait map, confirmed priorities, and the conversation so far — infer \
@@ -817,8 +865,8 @@ STRICT RULES:
 - Present ONLY deal breakers. Do NOT repeat the trait map or dimension categories.
 - Keep each deal breaker to one concise line.
 - Frame as inference: "Based on who you are, I think these would be real problems..."
-- If a user's correction seems to contradict something they said earlier, start your response \
-with exactly 'I want to check something —' before asking for clarification."""
+
+{trust_recovery_instructions}"""
 
 
 def stage2_proposition(user_portrait, relationship_type):
@@ -830,7 +878,9 @@ def stage2_proposition(user_portrait, relationship_type):
 
     # Shared message list — accumulates context across all phases
     messages = [
-        {"role": "system", "content": STAGE2_TRAIT_MAP_SYSTEM},
+        {"role": "system", "content": STAGE2_TRAIT_MAP_SYSTEM.format(
+            trust_recovery_instructions=TRUST_RECOVERY_INSTRUCTIONS
+        )},
         {"role": "user", "content": user_context}
     ]
 
@@ -839,11 +889,10 @@ def stage2_proposition(user_portrait, relationship_type):
 
     ai_response = call_llm(messages, max_tokens=3000)
     if ai_response:
-        print("AI:", ai_response, "\n")
-        messages.append({"role": "assistant", "content": ai_response})
-
-        # Trust Recovery: Error 1 detection
-        confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+        recovery_type = trust_recovery.ai_signals_recovery(ai_response)
+        clean_response = TrustRecoverySystem.strip_recovery_tag(ai_response)
+        print("AI:", clean_response, "\n")
+        messages.append({"role": "assistant", "content": clean_response})
 
         acceptance_keywords = {
             "yes", "yeah", "yep", "looks good", "that's right", "correct", "good",
@@ -856,25 +905,28 @@ def stage2_proposition(user_portrait, relationship_type):
             messages.append({"role": "user", "content": user_input})
             print()
 
-            if confusion_pending:
+            if recovery_type == "error1":
                 trust_recovery.recover_error1(user_input, messages, user_portrait)
-                confusion_pending = False
+                recovery_type = None
 
             if user_input.lower().strip() in acceptance_keywords:
                 break
 
             # User gave feedback — re-generate trait map with their correction
             retry_messages = [
-                {"role": "system", "content": STAGE2_TRAIT_MAP_SYSTEM},
+                {"role": "system", "content": STAGE2_TRAIT_MAP_SYSTEM.format(
+                    trust_recovery_instructions=TRUST_RECOVERY_INSTRUCTIONS
+                )},
                 {"role": "user", "content": user_context},
-                {"role": "assistant", "content": ai_response},
+                {"role": "assistant", "content": clean_response},
                 {"role": "user", "content": f"The user wants to adjust the trait map: {user_input}\n\nPlease re-present the trait map with the user's corrections applied."}
             ]
             ai_response = call_llm(retry_messages, max_tokens=3000)
             if ai_response:
-                print("AI:", ai_response, "\n")
-                messages.append({"role": "assistant", "content": ai_response})
-                confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+                recovery_type = trust_recovery.ai_signals_recovery(ai_response)
+                clean_response = TrustRecoverySystem.strip_recovery_tag(ai_response)
+                print("AI:", clean_response, "\n")
+                messages.append({"role": "assistant", "content": clean_response})
 
     # --- Phase B: Select Categories (no user interaction) ---
     select_msg = [
@@ -909,7 +961,8 @@ def stage2_proposition(user_portrait, relationship_type):
     for category_name in category_names:
         cat_system = STAGE2_CATEGORY_SYSTEM.format(
             relationship_type=relationship_type,
-            category_name=category_name
+            category_name=category_name,
+            trust_recovery_instructions=TRUST_RECOVERY_INSTRUCTIONS
         )
         cat_context = (
             f"{user_context}\n\n"
@@ -922,21 +975,21 @@ def stage2_proposition(user_portrait, relationship_type):
 
         ai_response = call_llm(cat_messages, max_tokens=3000)
         if ai_response:
-            print("AI:", ai_response, "\n")
+            cat_recovery_type = trust_recovery.ai_signals_recovery(ai_response)
+            cat_clean = TrustRecoverySystem.strip_recovery_tag(ai_response)
+            print("AI:", cat_clean, "\n")
 
             # Append to shared messages so later phases have context
-            messages.append({"role": "assistant", "content": ai_response})
-
-            confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+            messages.append({"role": "assistant", "content": cat_clean})
 
             while True:
                 user_input = input("You (type 'yes' to confirm, or suggest changes): ").strip()
                 messages.append({"role": "user", "content": user_input})
                 print()
 
-                if confusion_pending:
+                if cat_recovery_type == "error1":
                     trust_recovery.recover_error1(user_input, messages, user_portrait)
-                    confusion_pending = False
+                    cat_recovery_type = None
 
                 if user_input.lower().strip() in acceptance_keywords:
                     break
@@ -945,14 +998,15 @@ def stage2_proposition(user_portrait, relationship_type):
                 retry_messages = [
                     {"role": "system", "content": cat_system},
                     {"role": "user", "content": cat_context},
-                    {"role": "assistant", "content": ai_response},
+                    {"role": "assistant", "content": cat_clean},
                     {"role": "user", "content": f"The user wants to adjust this ranking: {user_input}\n\nPlease re-present this category with the user's corrections applied."}
                 ]
                 ai_response = call_llm(retry_messages, max_tokens=3000)
                 if ai_response:
-                    print("AI:", ai_response, "\n")
-                    messages.append({"role": "assistant", "content": ai_response})
-                    confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+                    cat_recovery_type = trust_recovery.ai_signals_recovery(ai_response)
+                    cat_clean = TrustRecoverySystem.strip_recovery_tag(ai_response)
+                    print("AI:", cat_clean, "\n")
+                    messages.append({"role": "assistant", "content": cat_clean})
 
             # Update confirmed conversation for next category
             confirmed_trait_map = "\n".join(
@@ -960,7 +1014,10 @@ def stage2_proposition(user_portrait, relationship_type):
             )
 
     # --- Phase D: Deal Breakers ---
-    db_system = STAGE2_DEAL_BREAKERS_SYSTEM.format(relationship_type=relationship_type)
+    db_system = STAGE2_DEAL_BREAKERS_SYSTEM.format(
+        relationship_type=relationship_type,
+        trust_recovery_instructions=TRUST_RECOVERY_INSTRUCTIONS
+    )
     db_context = (
         f"{user_context}\n\n"
         f"Full confirmed conversation so far:\n{confirmed_trait_map}"
@@ -972,19 +1029,19 @@ def stage2_proposition(user_portrait, relationship_type):
 
     ai_response = call_llm(db_messages, max_tokens=3000)
     if ai_response:
-        print("AI:", ai_response, "\n")
-        messages.append({"role": "assistant", "content": ai_response})
-
-        confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+        db_recovery_type = trust_recovery.ai_signals_recovery(ai_response)
+        db_clean = TrustRecoverySystem.strip_recovery_tag(ai_response)
+        print("AI:", db_clean, "\n")
+        messages.append({"role": "assistant", "content": db_clean})
 
         while True:
             user_input = input("You (type 'yes' to confirm, or suggest changes): ").strip()
             messages.append({"role": "user", "content": user_input})
             print()
 
-            if confusion_pending:
+            if db_recovery_type == "error1":
                 trust_recovery.recover_error1(user_input, messages, user_portrait)
-                confusion_pending = False
+                db_recovery_type = None
 
             if user_input.lower().strip() in acceptance_keywords:
                 break
@@ -993,14 +1050,15 @@ def stage2_proposition(user_portrait, relationship_type):
             retry_messages = [
                 {"role": "system", "content": db_system},
                 {"role": "user", "content": db_context},
-                {"role": "assistant", "content": ai_response},
+                {"role": "assistant", "content": db_clean},
                 {"role": "user", "content": f"The user wants to adjust the deal breakers: {user_input}\n\nPlease re-present the deal breakers with the user's corrections applied."}
             ]
             ai_response = call_llm(retry_messages, max_tokens=3000)
             if ai_response:
-                print("AI:", ai_response, "\n")
-                messages.append({"role": "assistant", "content": ai_response})
-                confusion_pending = trust_recovery.ai_signals_confusion(ai_response)
+                db_recovery_type = trust_recovery.ai_signals_recovery(ai_response)
+                db_clean = TrustRecoverySystem.strip_recovery_tag(ai_response)
+                print("AI:", db_clean, "\n")
+                messages.append({"role": "assistant", "content": db_clean})
 
     print("AI: PROPOSITION CONFIRMED — I have everything I need. Let's build your profile.\n")
 
@@ -1226,10 +1284,12 @@ def stage4_profile(proposition_data):
 # ===============================
 # STAGE 5: REFINEMENT
 # ===============================
-# Entry check (Error 2): Ask "Does this feel right?" — if user signals
-# dissatisfaction, run assumption audit before entering the edit loop.
-# Edit loop (Error 3): Track frozen_profile. If user signals over-scope
-# after an edit, revert to frozen and apply only the targeted change.
+# The AI has full trust recovery agency here via TRUST_RECOVERY_INSTRUCTIONS
+# injected into its system prompt. It self-reports errors using tags:
+#   [TRUST_RECOVERY:error2] — AI flags false assumptions in the profile
+#   [TRUST_RECOVERY:error3] — AI flags that it changed more than was asked
+# The runner detects tags after each LLM call and routes to the appropriate
+# recovery function, then resets the message context from the frozen profile.
 # ===============================
 
 STAGE5_SYSTEM = """You are helping the user refine a {relationship_type} profile through natural conversation.
@@ -1240,7 +1300,9 @@ might be worth exploring.
 
 When the user is done, close warmly.
 
-Never include anything the user has flagged as a deal breaker."""
+Never include anything the user has flagged as a deal breaker.
+
+{trust_recovery_instructions}"""
 
 
 def stage5_refinement(user_portrait, proposition_data, profile_text):
@@ -1250,7 +1312,11 @@ def stage5_refinement(user_portrait, proposition_data, profile_text):
 
     relationship_type = proposition_data.get("relationship_type", "connection")
 
-    # --- Trust Recovery: Error 2 detection (zero cost) ---
+    stage5_system_content = STAGE5_SYSTEM.format(
+        relationship_type=relationship_type,
+        trust_recovery_instructions=TRUST_RECOVERY_INSTRUCTIONS
+    )
+
     # Ask if the profile feels right — the user's answer becomes the
     # first refinement input so feedback is never lost.
     print("AI: Does this feel right to you, or is something off?")
@@ -1266,10 +1332,6 @@ def stage5_refinement(user_portrait, proposition_data, profile_text):
             f"you're looking for. Good luck out there.\n"
         )
         return
-
-    # If dissatisfaction detected, run trust recovery first
-    if trust_recovery.user_signals_dissatisfaction(initial_reaction):
-        profile_text = trust_recovery.recover_error2(profile_text, user_portrait, proposition_data)
 
     # frozen_profile: the last version the user has implicitly approved
     frozen_profile = profile_text
@@ -1298,15 +1360,14 @@ def stage5_refinement(user_portrait, proposition_data, profile_text):
     messages = [
         {
             "role": "system",
-            "content": STAGE5_SYSTEM.format(relationship_type=relationship_type)
+            "content": stage5_system_content
         },
         {"role": "user", "content": "Here is the current profile:\n\n" + profile_text},
         {"role": "assistant", "content": "I have the profile ready. What would you like to tweak?"}
     ]
 
-    # Use the initial reaction as the first feedback if it wasn't a
-    # dissatisfaction signal (those are already handled above)
-    first_feedback = initial_reaction if not trust_recovery.user_signals_dissatisfaction(initial_reaction) else None
+    # Use the initial reaction as the first feedback input
+    first_feedback = initial_reaction
 
     while True:
         if first_feedback:
@@ -1323,21 +1384,6 @@ def stage5_refinement(user_portrait, proposition_data, profile_text):
             )
             break
 
-        # --- Trust Recovery: Error 3 detection (zero cost) ---
-        if last_feedback and trust_recovery.user_signals_overscope(feedback):
-            corrected = trust_recovery.recover_error3(
-                last_feedback, frozen_profile, proposition_data
-            )
-            if corrected:
-                frozen_profile = corrected
-                messages = [
-                    {"role": "system", "content": STAGE5_SYSTEM.format(relationship_type=relationship_type)},
-                    {"role": "user", "content": "Here is the current profile:\n\n" + frozen_profile},
-                    {"role": "assistant", "content": "Profile updated. What else would you like to change?"}
-                ]
-                last_feedback = None
-            continue
-
         messages.append({
             "role": "user",
             "content": (
@@ -1353,13 +1399,46 @@ def stage5_refinement(user_portrait, proposition_data, profile_text):
             print("AI: Something went wrong. Let's try again.")
             continue
 
-        messages.append({"role": "assistant", "content": ai_response})
+        # --- Trust Recovery: AI self-reports an error ---
+        recovery_type = trust_recovery.ai_signals_recovery(ai_response)
+        clean_response = TrustRecoverySystem.strip_recovery_tag(ai_response)
+
+        if recovery_type == "error2":
+            # AI flagged false assumptions in the profile
+            profile_text = trust_recovery.recover_error2(
+                frozen_profile, user_portrait, proposition_data
+            )
+            frozen_profile = profile_text
+            messages = [
+                {"role": "system", "content": stage5_system_content},
+                {"role": "user", "content": "Here is the current profile:\n\n" + frozen_profile},
+                {"role": "assistant", "content": "Profile updated after assumption audit. What else would you like to change?"}
+            ]
+            last_feedback = None
+            continue
+
+        if recovery_type == "error3":
+            # AI flagged that it changed more than was asked
+            corrected = trust_recovery.recover_error3(
+                last_feedback or feedback, frozen_profile, proposition_data
+            )
+            if corrected:
+                frozen_profile = corrected
+                messages = [
+                    {"role": "system", "content": stage5_system_content},
+                    {"role": "user", "content": "Here is the current profile:\n\n" + frozen_profile},
+                    {"role": "assistant", "content": "Profile corrected to targeted edit only. What else would you like to change?"}
+                ]
+                last_feedback = None
+            continue
+
+        messages.append({"role": "assistant", "content": clean_response})
         print(f"\n{'-' * 60}\n")
-        print(ai_response)
+        print(clean_response)
         print(f"\n{'-' * 60}")
         print("(Type 'done' when you're happy with it.)\n")
 
-        frozen_profile = ai_response
+        frozen_profile = clean_response
         last_feedback = feedback
 
 
@@ -1420,13 +1499,13 @@ def run_prototype():
         for i, event in enumerate(trust_recovery.recovery_log, 1):
             etype = event.get("type", "unknown")
             if etype == "error_1_confusion":
-                print(f"  [{i}] AI confusion resolved after user clarified a shift")
+                print(f"  [{i}] Error 1 — AI named confusion, clarified with user, shared model restored")
             elif etype == "error_2_assumption_audit":
                 n = event.get("corrections_made", 0)
                 found = event.get("inferences_found", 0)
-                print(f"  [{i}] Assumption audit (user-triggered): {found} found, {n} corrected")
+                print(f"  [{i}] Error 2 — Full assumption audit: {found} inferred traits found, {n} corrected")
             elif etype == "error_3_overscope":
-                print(f"  [{i}] Over-scope corrected for: \"{event.get('edit_requested', '')}\"")
+                print(f"  [{i}] Error 3 — Over-scope acknowledged, reverted to targeted edit: \"{event.get('edit_requested', '')}\"")
         print("-" * 60 + "\n")
 
 
