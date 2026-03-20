@@ -1221,7 +1221,6 @@ def main():
     st.markdown("""
         <style>
         .stDeployButton {display: none;}
-        button[kind="secondary"] {display: none;}
 
         .stChatMessage {
             overflow-y: visible !important;
@@ -1279,9 +1278,8 @@ def main():
                 st.markdown(f"⚪ {STAGE_LABELS[stage_key]}")
 
         st.divider()
-        if st.button("Start Over"):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
+        if st.sidebar.button("Start Over"):
+            st.session_state.clear()
             st.rerun()
 
     # Main content
