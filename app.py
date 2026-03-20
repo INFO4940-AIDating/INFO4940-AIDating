@@ -558,8 +558,8 @@ TENSION_SYSTEM_PROMPT = (
     "- Ask **exactly ONE** clarifying question per message (one `?` only). "
     "Optional: at most 1–2 short setup sentences before the question.\n"
     "- Do **not** stack, number, or bullet multiple questions.\n"
-    "- On **3 of 3**: this is your **last** message in this stage — ask one final question only; "
-    "the user's **next** reply ends clarifications (do not assume you will speak again).\n"
+    "- On **3 of 3**: ask one final clarifying question. Do NOT add any disclaimers, notes, "
+    "or remarks about the question budget or whether the user needs to answer. Just ask the question naturally.\n"
     "- If priorities already feel clear before turn 3, you may write [RESOLVED] on its own line and add a brief warm closing "
     "with **no** question — otherwise keep probing until turn 3.\n\n"
     "Do not resolve tensions for them — let the user think through them.\n\n"
@@ -716,24 +716,51 @@ _CONFIRMATION_NEGATORS = (
 )
 
 
+def _llm_classify_confirmation(user_input: str) -> bool:
+    """Fallback: ask the LLM whether the user is confirming or giving feedback."""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a classifier. The user just replied to a prompt asking them to confirm or suggest changes. "
+                "Determine whether the user is CONFIRMING (accepting, agreeing, expressing satisfaction) "
+                "or giving FEEDBACK (requesting changes, additions, or corrections).\n\n"
+                "Reply with exactly one word: CONFIRM or FEEDBACK"
+            ),
+        },
+        {"role": "user", "content": user_input},
+    ]
+    response = call_llm(messages, temperature=0.0, max_tokens=10)
+    if response:
+        return "confirm" in response.strip().lower()
+    return False
+
+
 def user_signals_confirmation(user_input: str) -> bool:
     """True when the user is accepting / confirming, including 'yes, these are right'."""
     t = (user_input or "").lower().strip()
     if not t:
         return False
+    # Fast path: exact matches
     if t in _CONFIRMATION_EXACT:
         return True
+    # Fast path: known phrases
     if any(p in t for p in _CONFIRMATION_PHRASES):
         if any(n in t for n in _CONFIRMATION_NEGATORS):
             return False
         return True
+    # Fast path: starts with a confirmation word
     first_token = t.split(maxsplit=1)[0] if t else ""
     first_clean = first_token.strip(".,!?;:\"'")
     if first_clean in {"yes", "yeah", "yep", "yup", "correct", "perfect", "sure", "ok", "okay", "right", "fine"}:
         if any(n in t for n in _CONFIRMATION_NEGATORS):
             return False
         return True
-    return False
+    # Fast path: negators present means definitely feedback
+    if any(n in t for n in _CONFIRMATION_NEGATORS):
+        return False
+    # Slow path: ambiguous input — ask the LLM
+    return _llm_classify_confirmation(user_input)
 
 
 def extract_user_portrait(conversation_messages):
@@ -1091,8 +1118,8 @@ def tension_clarification_turn_user_message(clarification_num: int) -> str:
     """Inject before each tension LLM call so the model knows which of 3 clarifications it is."""
     if clarification_num == 3:
         return (
-            "This is clarification **3 of 3** — ask exactly one final question, then the user's next reply ends this stage "
-            "(do not assume you will speak again)."
+            "This is clarification **3 of 3** — ask exactly one final question. "
+            "Do NOT add any disclaimers about this being the last question or whether they need to answer."
         )
     return f"This is clarification **{clarification_num} of 3** — ask exactly one question."
 
@@ -1427,15 +1454,24 @@ def main():
                 )
                 messages = [{"role": "system", "content": profile_prompt}]
 
-                if user_input.lower() not in {"surprise me", "surprise", "no", "nope", ""}:
+                has_user_ideas = user_input.lower() not in {"surprise me", "surprise", "no", "nope", ""}
+                if has_user_ideas:
                     messages.append({"role": "user", "content": f"The user wants to include these ideas: {user_input}"})
+
+                name_instruction = (
+                    "Start with one line only: Meet [FirstName], a [Age] year old [Gender]. "
+                    "You MUST use the name the user provided above — do NOT invent a different name. "
+                    "Invent a plausible age."
+                ) if has_user_ideas else (
+                    "Start with one line only: Meet [FirstName], a [Age] year old [Gender]. (invent a plausible first name and age). "
+                )
 
                 messages.append({
                     "role": "user",
                     "content": (
                         f"Generate a complete profile based on these confirmed priorities: "
                         f"{json.dumps(st.session_state.proposition_data, indent=2)}.\n"
-                        "Start with one line only: Meet [FirstName], a [Age] year old [Gender]. (invent a plausible first name and age). "
+                        f"{name_instruction}"
                         "Then a blank line, then the section headers and body. "
                         f"Select appropriate sections for this relationship type. "
                         f"End with a 'Why This Person Fits You' section. "
