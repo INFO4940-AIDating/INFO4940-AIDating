@@ -552,10 +552,17 @@ def get_deal_breakers_system_prompt(relationship_type):
 TENSION_SYSTEM_PROMPT = (
     "You are a warm relationship coach having a conversation with the user. "
     "Always address the user directly as 'you' — speak to them, not about them. "
-    "Analyze their inferred relationship priorities and detect any internal contradictions or tensions. "
-    "Ask ONE clarifying question at a time in a conversational, friendly tone. "
-    "Do not resolve tensions yourself — let the user think through them. "
-    "Stop when the priorities are clear enough to generate a profile, or after 3 turns.\n\n"
+    "Analyze their inferred relationship priorities and detect any internal contradictions or tensions.\n\n"
+    "Each time you reply, the user message will say which clarification this is (**1 of 3**, **2 of 3**, or **3 of 3**). "
+    "Follow that line strictly:\n"
+    "- Ask **exactly ONE** clarifying question per message (one `?` only). "
+    "Optional: at most 1–2 short setup sentences before the question.\n"
+    "- Do **not** stack, number, or bullet multiple questions.\n"
+    "- On **3 of 3**: this is your **last** message in this stage — ask one final question only; "
+    "the user's **next** reply ends clarifications (do not assume you will speak again).\n"
+    "- If priorities already feel clear before turn 3, you may write [RESOLVED] on its own line and add a brief warm closing "
+    "with **no** question — otherwise keep probing until turn 3.\n\n"
+    "Do not resolve tensions for them — let the user think through them.\n\n"
     f"{TRUST_RECOVERY_INSTRUCTIONS}"
 )
 
@@ -1070,10 +1077,22 @@ def handle_proposition(user_input):
             advance_stage()
             start_tension_stage()
 
+
+def tension_clarification_turn_user_message(clarification_num: int) -> str:
+    """Inject before each tension LLM call so the model knows which of 3 clarifications it is."""
+    if clarification_num == 3:
+        return (
+            "This is clarification **3 of 3** — ask exactly one final question, then the user's next reply ends this stage "
+            "(do not assume you will speak again)."
+        )
+    return f"This is clarification **{clarification_num} of 3** — ask exactly one question."
+
+
 def start_tension_stage():
     system_msg = {"role": "system", "content": TENSION_SYSTEM_PROMPT}
     user_context = {"role": "user", "content": f"Here are the user's inferred priorities: {json.dumps(st.session_state.proposition_data)}"}
-    st.session_state.stage_messages = [system_msg, user_context]
+    turn_hint = {"role": "user", "content": tension_clarification_turn_user_message(1)}
+    st.session_state.stage_messages = [system_msg, user_context, turn_hint]
 
     transition_msg = "Let me think through a couple of things with you..."
     st.session_state.messages.append({"role": "assistant", "content": transition_msg})
@@ -1112,6 +1131,11 @@ def handle_tension(user_input):
         advance_stage()
         start_profile_stage()
         return
+
+    # round_count is now 2 or 3 = which clarification the assistant is about to produce
+    st.session_state.stage_messages.append(
+        {"role": "user", "content": tension_clarification_turn_user_message(st.session_state.round_count)}
+    )
 
     with st.spinner("Thinking..."):
         ai_response = call_llm(st.session_state.stage_messages, max_tokens=3000)
