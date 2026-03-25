@@ -1,5 +1,7 @@
-import streamlit as st
+import re
 import json
+import streamlit as st
+import streamlit.components.v1 as components
 
 # -------------------------------
 # CONFIG
@@ -261,7 +263,6 @@ class TrustRecoverySystem:
     @staticmethod
     def strip_recovery_tag(ai_response):
         """Remove the [TRUST_RECOVERY:*] tag from the AI response before displaying."""
-        import re
         return re.sub(r"\[TRUST_RECOVERY:error\d\]\s*", "", ai_response).strip()
 
     # -------------------------------------------------------------------
@@ -641,8 +642,8 @@ TENSION_SYSTEM_PROMPT = (
     "- Ask **exactly ONE** clarifying question per message (one `?` only). "
     "Optional: at most 1–2 short setup sentences before the question.\n"
     "- Do **not** stack, number, or bullet multiple questions.\n"
-    "- On **3 of 3**: this is your **last** message in this stage — ask one final question only; "
-    "the user's **next** reply ends clarifications (do not assume you will speak again).\n"
+    "- On **3 of 3**: ask one final clarifying question. Do NOT add any disclaimers, notes, "
+    "or remarks about the question budget or whether the user needs to answer. Just ask the question naturally.\n"
     "- If priorities already feel clear before turn 3, you may write [RESOLVED] on its own line and add a brief warm closing "
     "with **no** question — otherwise keep probing until turn 3.\n\n"
     "Do not resolve tensions for them — let the user think through them.\n\n"
@@ -758,7 +759,13 @@ def load_llm():
         verbose=False
     )
 
-def call_llm(messages, temperature=0.7, max_tokens=24000):
+def call_llm(messages, temperature=0.7, max_tokens=3000):
+    if TEST_MODE:
+        idx = st.session_state.get("test_llm_idx", 0)
+        st.session_state.test_llm_idx = idx + 1
+        if idx < len(_TEST_LLM_RESPONSES):
+            return _TEST_LLM_RESPONSES[idx]
+        return "I think we have everything we need."
     llm = load_llm()
     try:
         response = llm.create_chat_completion(
@@ -799,24 +806,95 @@ _CONFIRMATION_NEGATORS = (
 )
 
 
+def _llm_classify_confirmation(user_input: str) -> bool:
+    """Fallback: ask the LLM whether the user is confirming or giving feedback."""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a classifier. The user just replied to a prompt asking them to confirm or suggest changes. "
+                "Determine whether the user is CONFIRMING (accepting, agreeing, expressing satisfaction) "
+                "or giving FEEDBACK (requesting changes, additions, or corrections).\n\n"
+                "Reply with exactly one word: CONFIRM or FEEDBACK"
+            ),
+        },
+        {"role": "user", "content": user_input},
+    ]
+    response = call_llm(messages, temperature=0.0, max_tokens=10)
+    if response:
+        return "confirm" in response.strip().lower()
+    return False
+
+
 def user_signals_confirmation(user_input: str) -> bool:
     """True when the user is accepting / confirming, including 'yes, these are right'."""
     t = (user_input or "").lower().strip()
     if not t:
         return False
+    # Fast path: exact matches
     if t in _CONFIRMATION_EXACT:
         return True
+    # Fast path: known phrases
     if any(p in t for p in _CONFIRMATION_PHRASES):
         if any(n in t for n in _CONFIRMATION_NEGATORS):
             return False
         return True
+    # Fast path: starts with a confirmation word
     first_token = t.split(maxsplit=1)[0] if t else ""
     first_clean = first_token.strip(".,!?;:\"'")
     if first_clean in {"yes", "yeah", "yep", "yup", "correct", "perfect", "sure", "ok", "okay", "right", "fine"}:
         if any(n in t for n in _CONFIRMATION_NEGATORS):
             return False
         return True
-    return False
+    # Fast path: negators present means definitely feedback
+    if any(n in t for n in _CONFIRMATION_NEGATORS):
+        return False
+    # Slow path: ambiguous input — ask the LLM
+    return _llm_classify_confirmation(user_input)
+
+
+# Progressive traits shown in Big 6 during about_you (TEST_MODE only).
+# One list per user turn — grows each round so cards appear organically.
+_PROGRESSIVE_TRAITS = [
+    ["thoughtful"],
+    ["thoughtful", "introspective"],
+    ["thoughtful", "introspective", "empathetic"],
+    ["thoughtful", "introspective", "empathetic", "steady", "authentic"],
+]
+
+
+def extract_partial_traits(stage_messages):
+    """Infer traits from conversation so far — no LLM consumed in TEST_MODE."""
+    user_turns = sum(1 for m in stage_messages if m["role"] == "user")
+    if user_turns == 0:
+        return []
+
+    if TEST_MODE:
+        idx = min(user_turns - 1, len(_PROGRESSIVE_TRAITS) - 1)
+        return _PROGRESSIVE_TRAITS[idx]
+
+    # Real mode: lightweight LLM call (separate from the main response call)
+    conversation_text = "\n".join(
+        f"{m['role'].upper()}: {m['content']}"
+        for m in stage_messages
+        if m["role"] in ("user", "assistant")
+    )
+    messages = [
+        {"role": "system", "content": (
+            "You are extracting personality traits. Return ONLY a JSON array of "
+            "1-6 single-word or short-phrase trait strings you can confidently "
+            "infer from the user's messages so far. Example: [\"thoughtful\", "
+            "\"introverted\"]. No other text."
+        )},
+        {"role": "user", "content": f"What traits can you infer so far?\n\n{conversation_text}"}
+    ]
+    response = call_llm(messages, temperature=0.1, max_tokens=200)
+    try:
+        start = response.find("[")
+        end = response.rfind("]") + 1
+        return json.loads(response[start:end])[:6]
+    except Exception:
+        return []
 
 
 def extract_user_portrait(conversation_messages):
@@ -937,6 +1015,10 @@ def init_session_state():
         st.session_state.awaiting_deal_breakers = False
     if "deal_breakers_confirmed" not in st.session_state:
         st.session_state.deal_breakers_confirmed = False
+    if "big6_traits" not in st.session_state:
+        st.session_state.big6_traits = []
+    if "test_llm_idx" not in st.session_state:
+        st.session_state.test_llm_idx = 0
 
 def advance_stage():
     current_idx = STAGES.index(st.session_state.stage)
@@ -977,6 +1059,13 @@ def handle_about_you(user_input):
         ai_response = TrustRecoverySystem.strip_recovery_tag(ai_response)
         st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
         st.session_state.messages.append({"role": "assistant", "content": ai_response})
+
+        # Progressively surface traits in the Big 6 panel as answers come in
+        partial = extract_partial_traits(st.session_state.stage_messages)
+        if partial:
+            existing = st.session_state.user_portrait.get("personality_traits", [])
+            merged = list(dict.fromkeys(existing + partial))
+            st.session_state.user_portrait["personality_traits"] = merged[:6]
 
         if check_stage_completion("about_you", ai_response):
             st.session_state.messages.append({"role": "assistant", "content": "Does this capture you well? Feel free to correct anything or add something important I missed."})
@@ -1174,8 +1263,8 @@ def tension_clarification_turn_user_message(clarification_num: int) -> str:
     """Inject before each tension LLM call so the model knows which of 3 clarifications it is."""
     if clarification_num == 3:
         return (
-            "This is clarification **3 of 3** — ask exactly one final question, then the user's next reply ends this stage "
-            "(do not assume you will speak again)."
+            "This is clarification **3 of 3** — ask exactly one final question. "
+            "Do NOT add any disclaimers about this being the last question or whether they need to answer."
         )
     return f"This is clarification **{clarification_num} of 3** — ask exactly one question."
 
@@ -1328,6 +1417,359 @@ def handle_refinement(user_input):
 # -------------------------------
 # MAIN UI
 # -------------------------------
+# -----------------------------------------------------------------------
+# BIG 6 — Constants, HTML template, helpers
+# -----------------------------------------------------------------------
+
+CARD_COLORS = ["#4a7fa5", "#3d8b6e", "#7a5195", "#c05c7e", "#d4875a", "#557a95"]
+
+_BIG6_HTML = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:#f9fafb;padding:12px 10px 16px}}
+
+/* Header */
+.hd{{font-size:16px;font-weight:700;color:#111827;margin-bottom:6px}}
+.instructions{{background:#fff;border:1px solid #e5e7eb;border-radius:10px;
+  padding:10px 12px;margin-bottom:14px}}
+.instructions p{{font-size:12px;color:#374151;line-height:1.55;margin:0}}
+.instructions p+p{{margin-top:5px}}
+
+/* Row layout: [num] [slot] [arrows] */
+.row{{display:flex;align-items:center;gap:8px;margin-bottom:10px}}
+.num{{font-size:12px;color:#9ca3af;width:14px;text-align:right;flex-shrink:0}}
+.slot{{flex:1;height:88px;border-radius:12px;position:relative}}
+
+/* Skeleton */
+.sk{{width:100%;height:88px;border-radius:12px;border:2px dashed #e5e7eb;
+  background:#f0f1f3;display:flex;align-items:flex-end;padding:10px;
+  position:absolute;top:0;left:0}}
+.sk-lines{{display:flex;flex-direction:column;gap:5px}}
+.sk-line{{height:7px;border-radius:3px;
+  background:linear-gradient(90deg,#e5e7eb 25%,#f3f4f6 50%,#e5e7eb 75%);
+  background-size:200% 100%;animation:sh 1.4s ease-in-out infinite}}
+.sk-a{{width:55px}}.sk-b{{width:85px}}
+@keyframes sh{{0%{{background-position:200% 0}}100%{{background-position:-200% 0}}}}
+
+/* Card */
+.card{{width:100%;height:88px;border-radius:12px;padding:10px;
+  display:flex;flex-direction:column;justify-content:flex-end;
+  cursor:grab;position:absolute;top:0;left:0;z-index:2;
+  user-select:none;-webkit-user-select:none;
+  transition:opacity .12s, filter .15s}}
+.card:hover{{filter:brightness(0.88)}}
+.card:active{{cursor:grabbing}}
+.card.dim{{opacity:.3}}
+.card-name{{font-size:13px;font-weight:600;color:#fff;
+  text-shadow:0 1px 3px rgba(0,0,0,.35);pointer-events:none}}
+.card-x{{position:absolute;top:7px;right:7px;width:20px;height:20px;
+  background:rgba(255,255,255,.28);border:none;border-radius:50%;
+  cursor:pointer;font-size:13px;color:#fff;display:flex;align-items:center;
+  justify-content:center;line-height:1;padding:0;transition:background .1s;
+  pointer-events:all}}
+.card-x:hover{{background:rgba(255,255,255,.5)}}
+.slot.over .sk{{border-color:#f43f5e;background:#fff0f3}}
+
+/* Arrow buttons */
+.arrows{{display:flex;flex-direction:column;width:32px;flex-shrink:0;height:88px;
+  justify-content:center;gap:0}}
+.arr{{width:44px;height:44px;background:transparent;border:none;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  border-radius:8px;color:#9ca3af;font-size:18px;line-height:1;padding:0;
+  transition:background .12s, color .12s, transform .08s;flex-shrink:0}}
+.arr:hover{{background:#e5e7eb;color:#374151}}
+.arr:active{{background:#d1d5db;transform:scale(0.88)}}
+.arr.hidden{{visibility:hidden;pointer-events:none}}
+</style></head><body>
+
+<div class="hd">Top 6 Traits</div>
+
+<div class="instructions">
+  <p><strong>Rank what matters most</strong> in your ideal match — 1 is highest priority.</p>
+  <p>Drag cards to reorder &nbsp;·&nbsp; Use ↑↓ to nudge &nbsp;·&nbsp; × to remove a trait.</p>
+</div>
+
+<div id="board"></div>
+
+<script>
+const COLORS = {colors};
+const INCOMING = {traits};
+const KEY = 'big6_v3';
+
+let {{slots, colorMap}} = loadState();
+let dragSrc = null;
+let preview = null;
+let lastRemoved = null;
+let toastTimer = null;
+
+// ── State ──────────────────────────────────────────────────────────────
+function loadState() {{
+  try {{
+    const raw = sessionStorage.getItem(KEY);
+    if (raw) {{
+      const saved = JSON.parse(raw);
+      if (saved && saved.slots) return mergeState(saved);
+    }}
+  }} catch(_) {{}}
+  return buildFresh();
+}}
+
+function buildFresh() {{
+  const colorMap = {{}};
+  const slots = Array(6).fill(null).map((_, i) => {{
+    if (i < INCOMING.length) {{
+      const id = INCOMING[i];
+      const color = COLORS[i % COLORS.length];
+      colorMap[id] = color;
+      return {{id, label: cap(id), color}};
+    }}
+    return null;
+  }});
+  return {{slots, colorMap}};
+}}
+
+function mergeState(saved) {{
+  const colorMap = saved.colorMap || {{}};
+  const slots = saved.slots || Array(6).fill(null);
+  const usedIds = new Set(slots.filter(Boolean).map(s => s.id));
+  const newOnes = INCOMING.filter(t => !usedIds.has(t));
+  let ni = 0, nextColorIdx = Object.keys(colorMap).length;
+  const merged = [...slots];
+  for (let i = 0; i < 6; i++) {{
+    if (!merged[i] && ni < newOnes.length) {{
+      const id = newOnes[ni++];
+      const color = COLORS[nextColorIdx++ % COLORS.length];
+      colorMap[id] = color;
+      merged[i] = {{id, label: cap(id), color}};
+    }}
+  }}
+  return {{slots: merged.slice(0, 6), colorMap}};
+}}
+
+function compact() {{
+  const filled = slots.filter(Boolean);
+  for (let i = 0; i < 6; i++) slots[i] = i < filled.length ? filled[i] : null;
+}}
+
+function save() {{
+  sessionStorage.setItem(KEY, JSON.stringify({{slots, colorMap}}));
+}}
+
+function cap(s) {{ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }}
+
+// ── Actions ─────────────────────────────────────────────────────────────
+function removeCard(i) {{
+  lastRemoved = {{slot: i, card: slots[i]}};
+  slots[i] = null;
+  compact();
+  preview = null;
+  save();
+  render();
+  showToast();
+}}
+
+function undoRemove() {{
+  if (!lastRemoved) return;
+  const origSlot = lastRemoved.slot;
+  const card = lastRemoved.card;
+  const filledCount = slots.filter(Boolean).length;
+  const insertAt = Math.min(origSlot, filledCount);
+  for (let i = 5; i > insertAt; i--) slots[i] = slots[i - 1];
+  slots[insertAt] = card;
+  lastRemoved = null;
+  clearTimeout(toastTimer);
+  hideToast();
+  save(); render();
+}}
+
+function showToast() {{
+  clearTimeout(toastTimer);
+  const toast = getToastEl();
+  // Re-attach handler each time so it survives Streamlit reruns
+  const oldBtn = toast.querySelector('button');
+  if (oldBtn) {{
+    const btn = oldBtn.cloneNode(true);
+    oldBtn.parentNode.replaceChild(btn, oldBtn);
+    btn.addEventListener('click', undoRemove);
+  }}
+  toast.style.display = 'flex';
+  toastTimer = setTimeout(() => {{ hideToast(); lastRemoved = null; }}, 6000);
+}}
+
+function hideToast() {{
+  try {{ window.parent.document.getElementById('big6-toast').style.display = 'none'; }} catch(_) {{}}
+  const fb = document.getElementById('big6-toast-fb');
+  if (fb) fb.style.display = 'none';
+}}
+
+function getToastEl() {{
+  try {{
+    const pdoc = window.parent.document;
+    let el = pdoc.getElementById('big6-toast');
+    if (!el) {{
+      el = pdoc.createElement('div');
+      el.id = 'big6-toast';
+      el.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1f2937;color:#fff;' +
+        'padding:12px 18px;border-radius:10px;display:none;align-items:center;gap:14px;' +
+        'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;' +
+        'z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.3);';
+      const span = pdoc.createElement('span');
+      span.textContent = 'Trait removed';
+      const btn = pdoc.createElement('button');
+      btn.textContent = 'Undo';
+      btn.style.cssText = 'background:rgba(255,255,255,.18);border:none;color:#fff;' +
+        'padding:5px 12px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;';
+      btn.addEventListener('mouseover', () => btn.style.background = 'rgba(255,255,255,.3)');
+      btn.addEventListener('mouseout', () => btn.style.background = 'rgba(255,255,255,.18)');
+      el.append(span, btn);
+      pdoc.body.appendChild(el);
+    }}
+    return el;
+  }} catch(e) {{
+    // Sandboxed fallback — toast inside the iframe
+    let el = document.getElementById('big6-toast-fb');
+    if (!el) {{
+      el = document.createElement('div');
+      el.id = 'big6-toast-fb';
+      el.style.cssText = 'position:fixed;bottom:16px;right:16px;background:#1f2937;color:#fff;' +
+        'padding:12px 18px;border-radius:10px;display:none;align-items:center;gap:14px;' +
+        'font-family:-apple-system,sans-serif;font-size:14px;z-index:9999;' +
+        'box-shadow:0 4px 16px rgba(0,0,0,.3);';
+      const span = document.createElement('span');
+      span.textContent = 'Trait removed';
+      const btn = document.createElement('button');
+      btn.textContent = 'Undo';
+      btn.style.cssText = 'background:rgba(255,255,255,.18);border:none;color:#fff;' +
+        'padding:5px 12px;border-radius:6px;cursor:pointer;font-size:13px;';
+      el.append(span, btn);
+      document.body.appendChild(el);
+    }}
+    return el;
+  }}
+}}
+
+function moveUp(i) {{
+  if (i === 0 || !slots[i]) return;
+  [slots[i-1], slots[i]] = [slots[i], slots[i-1]];
+  save(); render();
+}}
+
+function moveDown(i) {{
+  const filled = slots.filter(Boolean).length;
+  if (i >= filled - 1 || !slots[i]) return;
+  [slots[i+1], slots[i]] = [slots[i], slots[i+1]];
+  save(); render();
+}}
+
+// ── Render ─────────────────────────────────────────────────────────────
+function render() {{
+  const board = document.getElementById('board');
+  board.innerHTML = '';
+  const display = preview || slots;
+  const filledCount = slots.filter(Boolean).length;
+
+  display.forEach((card, i) => {{
+    const row = mk('div', 'row');
+
+    // Left number
+    const num = mk('div', 'num'); num.textContent = i + 1;
+
+    // Slot
+    const slot = mk('div', 'slot'); slot.dataset.i = i;
+    const sk = mk('div', 'sk');
+    const lines = mk('div', 'sk-lines');
+    lines.append(skl('sk-a'), skl('sk-b'));
+    sk.append(lines); slot.append(sk);
+
+    if (card) {{
+      const c = mk('div', 'card');
+      c.style.background = card.color;
+      c.draggable = true;
+
+      const xb = mk('button', 'card-x'); xb.innerHTML = '&times;';
+      xb.addEventListener('click', e => {{ e.stopPropagation(); removeCard(i); }});
+
+      const nm = mk('div', 'card-name'); nm.textContent = card.label;
+      c.append(xb, nm);
+
+      c.addEventListener('dragstart', e => {{
+        dragSrc = i; e.dataTransfer.effectAllowed = 'move';
+        setTimeout(() => c.classList.add('dim'), 0);
+      }});
+      c.addEventListener('dragend', () => {{ dragSrc = null; preview = null; render(); }});
+      slot.append(c);
+    }}
+
+    slot.addEventListener('dragover', e => {{
+      e.preventDefault();
+      if (dragSrc === null || dragSrc === i) return;
+      slot.classList.add('over');
+      const next = [...slots];
+      [next[dragSrc], next[i]] = [next[i], next[dragSrc]];
+      if (JSON.stringify(preview) !== JSON.stringify(next)) {{ preview = next; render(); }}
+    }});
+    slot.addEventListener('dragleave', () => slot.classList.remove('over'));
+    slot.addEventListener('drop', e => {{
+      e.preventDefault();
+      if (dragSrc !== null && dragSrc !== i) {{
+        [slots[dragSrc], slots[i]] = [slots[i], slots[dragSrc]];
+        save();
+      }}
+      dragSrc = null; preview = null; render();
+    }});
+
+    // Right arrows (only for filled slots)
+    const arrows = mk('div', 'arrows');
+    if (card && filledCount > 1) {{
+      const upBtn = mk('button', 'arr');
+      upBtn.innerHTML = '&#8593;';
+      upBtn.title = 'Move up';
+      if (i === 0) upBtn.classList.add('hidden');
+      upBtn.addEventListener('click', () => moveUp(i));
+
+      const dnBtn = mk('button', 'arr');
+      dnBtn.innerHTML = '&#8595;';
+      dnBtn.title = 'Move down';
+      if (i === filledCount - 1) dnBtn.classList.add('hidden');
+      dnBtn.addEventListener('click', () => moveDown(i));
+
+      arrows.append(upBtn, dnBtn);
+    }}
+
+    row.append(num, slot, arrows);
+    board.append(row);
+  }});
+}}
+
+function mk(tag, cls) {{ const e = document.createElement(tag); if (cls) e.className = cls; return e; }}
+function skl(cls) {{ const l = mk('div', 'sk-line'); l.classList.add(cls); return l; }}
+
+render();
+</script></body></html>"""
+
+
+def build_big6_traits():
+    portrait = st.session_state.get("user_portrait", {})
+    if not portrait:
+        return []
+    traits = list(portrait.get("personality_traits", []))
+    for v in portrait.get("values", []):
+        if v not in traits and len(traits) < 6:
+            traits.append(v)
+    return traits[:6]
+
+
+def render_big6_panel():
+    traits = build_big6_traits()
+    html = _BIG6_HTML.format(
+        colors=json.dumps(CARD_COLORS),
+        traits=json.dumps(traits),
+    )
+    components.html(html, height=900, scrolling=False)
+
+
+# -----------------------------------------------------------------------
 def main():
     st.set_page_config(
         page_title="AI Relationship Profile Builder",
@@ -1356,6 +1798,11 @@ def main():
         [data-testid="stSidebar"] {
             display: flex !important;
             position: sticky !important;
+            background-color: #f9fafb !important;
+            border-right: 1px solid #e5e7eb !important;
+        }
+        [data-testid="stSidebar"] > div:first-child {
+            background-color: #f9fafb !important;
         }
 
         /* Target the actual inner container Streamlit renders */
@@ -1389,6 +1836,7 @@ def main():
         /* Textarea itself */
         [data-testid="stChatInput"] textarea {
             background-color: #ffffff !important;
+            color: #111827 !important;
             border: none !important;
             box-shadow: none !important;
         }
@@ -1500,9 +1948,18 @@ def main():
             st.session_state.clear()
             st.rerun()
 
-    # Main content
+    # Main content — two-column layout: chat left, Big 6 right
     st.title("AI Relationship Profile Builder")
+    left_col, right_col = st.columns([4, 1.5])
 
+    with right_col:
+        render_big6_panel()
+
+    with left_col:
+        render_chat_content()
+
+
+def render_chat_content():
     if st.session_state.stage == "intro":
         st.markdown("""
         This tool builds a detailed profile of your ideal connection — whether that's a
@@ -1571,6 +2028,12 @@ def main():
                     ai_response = TrustRecoverySystem.strip_recovery_tag(ai_response)
                     st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
                     st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                    # Progressively surface traits in Big 6 as answers come in
+                    partial = extract_partial_traits(st.session_state.stage_messages)
+                    if partial:
+                        existing = st.session_state.user_portrait.get("personality_traits", [])
+                        merged = list(dict.fromkeys(existing + partial))
+                        st.session_state.user_portrait["personality_traits"] = merged[:6]
                     if check_stage_completion("about_you", ai_response):
                         st.session_state.messages.append({"role": "assistant", "content": "Does this capture you well? Feel free to correct anything or add something important I missed."})
                         st.session_state.awaiting_summary_confirmation = True
@@ -1609,15 +2072,24 @@ def main():
                 )
                 messages = [{"role": "system", "content": profile_prompt}]
 
-                if user_input.lower() not in {"surprise me", "surprise", "no", "nope", ""}:
+                has_user_ideas = user_input.lower() not in {"surprise me", "surprise", "no", "nope", ""}
+                if has_user_ideas:
                     messages.append({"role": "user", "content": f"The user wants to include these ideas: {user_input}"})
+
+                name_instruction = (
+                    "Start with one line only: Meet [FirstName], a [Age] year old [Gender]. "
+                    "You MUST use the name the user provided above — do NOT invent a different name. "
+                    "Invent a plausible age."
+                ) if has_user_ideas else (
+                    "Start with one line only: Meet [FirstName], a [Age] year old [Gender]. (invent a plausible first name and age). "
+                )
 
                 messages.append({
                     "role": "user",
                     "content": (
                         f"Generate a complete profile based on these confirmed priorities: "
                         f"{json.dumps(st.session_state.proposition_data, indent=2)}.\n"
-                        "Start with one line only: Meet [FirstName], a [Age] year old [Gender]. (invent a plausible first name and age). "
+                        f"{name_instruction}"
                         "Then a blank line, then the section headers and body. "
                         f"Select appropriate sections for this relationship type. "
                         f"End with a 'Why This Person Fits You' section. "
