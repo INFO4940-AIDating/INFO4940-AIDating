@@ -2675,6 +2675,8 @@ def render_profile_comparison():
 
 
 def render_chat_content():
+    # "Skip Question" handler (callback-based, set from button on_click below)
+
     # "Generate Profile" skip: navigating to ?gen_profile=1 triggers the modal
     if st.query_params.get("gen_profile") == "1":
         st.query_params.clear()
@@ -2698,6 +2700,47 @@ def render_chat_content():
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
+    # "Skip Question" link — shown after the last assistant message if it's a question
+    _skippable_stages = ("about_you", "tension", "intro")
+    _last_msg = st.session_state.messages[-1] if st.session_state.messages else None
+    _show_skip = (
+        _last_msg is not None
+        and _last_msg["role"] == "assistant"
+        and "?" in _last_msg["content"]
+        and st.session_state.stage in _skippable_stages
+        and not st.session_state.get("awaiting_summary_confirmation")
+        and not st.session_state.get("awaiting_priority_ranking")
+    )
+    if _show_skip:
+        _skip_col1, _skip_col2 = st.columns([3, 1])
+        with _skip_col2:
+            st.button(
+                "Skip Question",
+                key="_skip_q_btn",
+                on_click=lambda: st.session_state.__setitem__("_skip_question", True),
+                type="tertiary",
+            )
+        # Style the skip button to look like an underlined text link
+        st.markdown("""
+        <style>
+        /* Style the Skip Question button as underlined text */
+        button[data-testid="stBaseButton-tertiary"][kind="tertiary"] {
+            color: #888 !important;
+            font-size: 13px !important;
+            text-decoration: underline !important;
+            background: none !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin-top: -12px !important;
+            font-family: "Source Sans Pro", sans-serif !important;
+        }
+        button[data-testid="stBaseButton-tertiary"][kind="tertiary"]:hover {
+            color: #555 !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
     if (
         st.session_state.stage == "profile"
         and st.session_state.get("awaiting_profile_choice")
@@ -2714,7 +2757,11 @@ def render_chat_content():
                 "content": "What kind of relationship or connection are you looking for? (e.g., romantic partner, close friend, squash buddy, study partner)"
             })
 
-        if user_input := st.chat_input("Your response..."):
+        _skip_active = st.session_state.pop("_skip_question", False)
+        user_input = st.chat_input("Your response...")
+        if _skip_active:
+            user_input = "romantic partner"
+        if user_input:
             st.session_state.relationship_type = user_input
             st.session_state.messages.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
@@ -2744,7 +2791,11 @@ def render_chat_content():
                 handle_summary_confirmation(user_input)
                 st.rerun()
         else:
-            if user_input := st.chat_input("Your response..."):
+            _skip_active = st.session_state.pop("_skip_question", False)
+            user_input = st.chat_input("Your response...")
+            if _skip_active:
+                user_input = "I'd rather not answer this one — let's move on."
+            if user_input:
                 st.session_state.messages.append({"role": "user", "content": user_input})
                 st.session_state.stage_messages.append({"role": "user", "content": user_input})
                 with st.chat_message("user"):
@@ -2781,7 +2832,11 @@ def render_chat_content():
             st.rerun()
 
     elif st.session_state.stage == "tension":
-        if user_input := st.chat_input("Your response..."):
+        _skip_active = st.session_state.pop("_skip_question", False)
+        user_input = st.chat_input("Your response...")
+        if _skip_active:
+            user_input = "I'm not sure — let's move on to the next one."
+        if user_input:
             with st.chat_message("user"):
                 st.markdown(user_input)
             handle_tension(user_input)
