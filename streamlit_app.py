@@ -1,7 +1,18 @@
 import streamlit as st
 import json
 import time
+import logging
 from openai import OpenAI
+
+# -------------------------------
+# LOGGING CONFIG
+# -------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [TRUST_RECOVERY] %(levelname)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+trust_logger = logging.getLogger("trust_recovery")
 
 # -------------------------------
 # CONFIG
@@ -184,11 +195,15 @@ class TrustRecoverySystem:
         """
         lowered = ai_response.lower()
         if "[trust_recovery:error3]" in lowered:
+            trust_logger.warning("⚠️  Trust recovery ACTIVATED — Error 3 (over-scope during refinement) detected in AI response.")
             return "error3"
         if "[trust_recovery:error2]" in lowered:
+            trust_logger.warning("⚠️  Trust recovery ACTIVATED — Error 2 (false assumption in profile) detected in AI response.")
             return "error2"
         if "[trust_recovery:error1]" in lowered:
+            trust_logger.warning("⚠️  Trust recovery ACTIVATED — Error 1 (AI confusion or contradiction) detected in AI response.")
             return "error1"
+        trust_logger.debug("No trust recovery tag found in AI response.")
         return None
 
     @staticmethod
@@ -206,6 +221,8 @@ class TrustRecoverySystem:
         Generate and append a brief corrected-model summary after the user
         has replied to the AI's embedded clarifying question.
         """
+        trust_logger.info("🔄 Error 1 recovery STARTING — generating corrected-model summary after user clarification.")
+        trust_logger.debug("  User clarification: %s", user_clarification)
         summary_msg = [
             {
                 "role": "system",
@@ -229,12 +246,14 @@ class TrustRecoverySystem:
 
         corrected_summary = call_llm(summary_msg, max_tokens=3000)
         if corrected_summary:
+            trust_logger.info("✅ Error 1 recovery COMPLETE — corrected-model summary appended to conversation.")
             st.session_state.messages.append({"role": "assistant", "content": corrected_summary})
 
         self.recovery_log.append({
             "type": "error_1_confusion",
             "user_clarification": user_clarification
         })
+        trust_logger.info("📋 Error 1 logged. Total recovery events so far: %d.", len(self.recovery_log))
 
     # -------------------------------------------------------------------
     # ERROR 2 RECOVERY
@@ -246,6 +265,7 @@ class TrustRecoverySystem:
         and apply targeted corrections to only the affected sections.
         Returns the corrected profile text, or the original if no changes.
         """
+        trust_logger.info("🔄 Error 2 recovery STARTING — auditing profile for all inferred assumptions.")
         st.session_state.messages.append({
             "role": "assistant",
             "content": (
@@ -259,6 +279,7 @@ class TrustRecoverySystem:
         inferences = self._run_assumption_audit(profile_text, user_portrait, proposition_data)
 
         if not inferences:
+            trust_logger.info("🔍 Error 2 assumption audit found 0 inferred assumptions — prompting user to point to specific issue.")
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": (
@@ -270,6 +291,7 @@ class TrustRecoverySystem:
             return profile_text
 
         corrections = {}
+        trust_logger.info("🔍 Error 2 assumption audit found %d inferred assumption(s) to review with user.", len(inferences))
         st.session_state.messages.append({
             "role": "assistant",
             "content": f"I found {len(inferences)} inferred assumption(s) to check with you:"
@@ -296,6 +318,7 @@ class TrustRecoverySystem:
                 corrections[trait] = user_reaction
 
         if not corrections:
+            trust_logger.info("✅ Error 2 recovery COMPLETE — all %d assumptions confirmed by user, no corrections needed.", len(inferences))
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": "All assumptions confirmed — the profile stands as written."
@@ -307,6 +330,7 @@ class TrustRecoverySystem:
             })
             return profile_text
 
+        trust_logger.info("✏️  Error 2 applying %d correction(s) to profile: %s", len(corrections), list(corrections.keys()))
         st.session_state.messages.append({
             "role": "assistant",
             "content": f"Got it — {len(corrections)} correction(s) noted. Updating only the affected sections now. Everything you already approved stays as is."
@@ -338,6 +362,7 @@ class TrustRecoverySystem:
 
         updated_profile = call_llm(regen_msg, max_tokens=3000)
         if updated_profile:
+            trust_logger.info("✅ Error 2 recovery COMPLETE — profile regenerated with %d targeted correction(s).", len(corrections))
             st.session_state.messages.append({"role": "assistant", "content": updated_profile})
             self.recovery_log.append({
                 "type": "error_2_assumption_audit",
@@ -345,6 +370,7 @@ class TrustRecoverySystem:
                 "corrections_made": len(corrections),
                 "traits_corrected": list(corrections.keys())
             })
+            trust_logger.info("📋 Error 2 logged. Total recovery events so far: %d.", len(self.recovery_log))
             return updated_profile
 
         return profile_text
@@ -359,6 +385,8 @@ class TrustRecoverySystem:
         and apply only the precise targeted edit the user originally asked for.
         Returns the corrected profile text.
         """
+        trust_logger.info("🔄 Error 3 recovery STARTING — AI over-scoped a refinement. Reverting to frozen profile.")
+        trust_logger.debug("  Original user request: %s", original_feedback)
         st.session_state.messages.append({
             "role": "assistant",
             "content": (
@@ -401,15 +429,18 @@ class TrustRecoverySystem:
 
         targeted_response = call_llm(targeted_edit_msg, max_tokens=3000)
         if targeted_response:
+            trust_logger.info("✅ Error 3 recovery COMPLETE — targeted edit applied, frozen profile used as base.")
             st.session_state.messages.append({"role": "assistant", "content": targeted_response})
 
             self.recovery_log.append({
                 "type": "error_3_overscope",
                 "edit_requested": original_feedback,
             })
+            trust_logger.info("📋 Error 3 logged. Total recovery events so far: %d.", len(self.recovery_log))
 
             return targeted_response
 
+        trust_logger.error("❌ Error 3 recovery FAILED — LLM returned no response. Falling back to frozen profile.")
         return frozen_profile
 
     def _run_assumption_audit(self, profile_text, user_portrait, proposition_data):
