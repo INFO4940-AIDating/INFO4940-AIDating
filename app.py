@@ -2722,6 +2722,14 @@ def render_chat_content():
                     f"DEAL BREAKERS (must NOT appear anywhere in the profile):\n{deal_breakers_block}"
                 )
 
+                profile_prompt = PROFILE_SYSTEM_PROMPT.format(
+                    relationship_type=relationship_type,
+                    trait_summary=trait_summary,
+                    proposition_json=proposition_json
+                )
+                messages = [{"role": "system", "content": profile_prompt}]
+                if has_user_ideas:
+                    messages.append({"role": "user", "content": f"The user wants to include these ideas: {user_input}"})
                 messages.append({
                     "role": "user",
                     "content": (
@@ -2735,15 +2743,7 @@ def render_chat_content():
                         f"End with a 'Why This Person Fits You' section that ties the profile back to the user's portrait. "
                         f"The profile must EXCLUDE all deal breakers entirely."
                     )
-                user_content = (
-                    f"Generate a complete profile based on these confirmed priorities: "
-                    f"{json.dumps(st.session_state.proposition_data, indent=2)}.\n"
-                    f"{name_instruction}"
-                    "Then a blank line, then the section headers and body. "
-                    f"Select appropriate sections for this relationship type. "
-                    f"End with a 'Why This Person Fits You' section. "
-                    f"Reflect the ranked priorities and exclude all deal breakers."
-                )
+                })
 
                 with st.spinner("Generating two profiles..."):
                     if TEST_MODE:
