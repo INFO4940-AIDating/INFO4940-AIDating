@@ -5,6 +5,75 @@ import json
 # CONFIG
 # -------------------------------
 MODEL_PATH = "llama-3.1-8b.gguf"
+TEST_MODE = True  # Set to False to use the real model
+
+# 24 mock LLM responses covering the full happy path + trust recovery.
+# Ordered to match the call sequence:
+#   R0-R4:  about_you questions (4 Qs + SUMMARY)
+#   R5:     extract_user_portrait JSON (hidden)
+#   R6-R7:  proposition trait map (first pass + revised after user tweak)
+#   R8:     deal breakers
+#   R9:     extract_proposition JSON (hidden)
+#   R10-R12: tension clarifying questions
+#   R13:    tension wrap-up
+#   R14:    profile generation
+#   R15-R16: refinement updates
+#   R17-R18: _llm_classify_confirmation fallbacks ("CONFIRM")
+#   R19:    error1 recovery — corrected model summary
+#   R20:    error2 recovery — assumption audit opener
+#   R21:    error2 recovery — corrected profile
+#   R22:    error3 recovery — reverted + targeted edit
+#   R23:    final refinement update
+_TEST_LLM_RESPONSES = [
+    # R0 — about_you Q1: personality
+    "What's something you genuinely enjoy that you think says a lot about who you are as a person?",
+    # R1 — about_you Q2: lifestyle
+    "When you have a free afternoon with no plans or obligations, how do you usually end up spending it?",
+    # R2 — about_you Q3: how you show up in relationships
+    "How would someone who knows you really well describe the way you show up in close relationships?",
+    # R3 — about_you Q4: what you're looking for in a partner
+    "What kind of person do you imagine being most at ease with — in terms of their energy, pace, and how they move through the world?",
+    # R4 — about_you SUMMARY: triggers end of stage and summary confirmation
+    "SUMMARY: You are a thoughtful, introspective person who values depth and genuine connection. You gravitate toward meaningful conversations and quiet, intentional ways of spending time. In relationships, you show up as the steady, caring presence — the one who listens deeply and remembers the small things. You tend to do best with someone whose energy is warm and grounded, someone who takes their time with people and doesn't need to fill every silence.",
+    # R5 — extract_user_portrait JSON (never shown to user)
+    '{"personality_traits": ["thoughtful", "introspective", "empathetic", "steady"], "communication_style": "Listens carefully, speaks with intention — quiet but deeply engaged", "values": ["authenticity", "depth", "loyalty", "growth"], "lifestyle": "Enjoys meaningful conversations, reading, time in nature, intentional downtime", "social_energy": "Introverted — recharges alone, values small close connections over large social groups", "thinking_style": "Reflective and intuitive, drawn to meaning and pattern", "decision_making": "Empathy-first — considers emotional impact before logic", "structure_vs_spontaneity": "Prefers structure and predictability, open to flexibility within that", "openness_to_experience": "Curious but measured — eases into novelty at their own pace", "relationship_tendencies": "Loyal, caring, shows love through attentiveness and consistency", "big_five_estimates": {"extraversion": "low", "openness": "medium-high", "agreeableness": "high", "conscientiousness": "medium-high", "neuroticism": "low-medium"}}',
+    # R6 — proposition trait map first pass
+    "Based on everything you've shared, here's what I see in you and what I think you'd need most in a connection:\n\n1. **Social energy** — You recharge alone and do best in small, close relationships. Someone who matches this quieter energy would feel like a relief, not a compromise.\n2. **Thinking style** — You're drawn to depth and meaning. Surface-level small talk drains you; a partner who can go deep on ideas and feelings is essential.\n3. **Decision-making** — You lead with how things feel before you reach for logic. You'd need someone emotionally present enough to meet you there.\n4. **Structure** — You like having a plan. A partner who respects that rhythm — rather than constantly pulling you into chaos — will let you thrive.\n5. **Openness** — You're genuinely curious but move at your own pace. You'd do well with someone who introduces new things gently, not forcefully.\n6. **Connection through loyalty** — You love through consistency and small, remembered details. Someone who shows up the same way every time is more meaningful to you than grand gestures.\n\nDoes this feel right, or would you adjust anything?",
+    # R7 — proposition revised trait map (after user feedback)
+    "Got it — here's the updated reflection:\n\n1. **Social energy** — You recharge alone and do best in small, close relationships. Someone who matches this quieter energy would feel like a relief, not a compromise.\n2. **Thinking style** — You're drawn to depth and meaning. Surface-level small talk drains you; a partner who can go deep on ideas and feelings is essential.\n3. **Decision-making** — You lead with how things feel before you reach for logic. You'd need someone emotionally present enough to meet you there.\n4. **Structure** — You like having a plan. A partner who respects that rhythm — rather than constantly pulling you into chaos — will let you thrive.\n5. **Openness** — You're genuinely curious but move at your own pace. You'd do well with someone who introduces new things gently, not forcefully.\n6. **Connection through presence** — You love through undivided attention and small, consistent moments. Someone who is truly there — not distracted or half-present — matters more to you than elaborate gestures.\n\nDoes this feel right now?",
+    # R8 — deal breakers
+    "Based on who you are, I think these would be genuine deal breakers for you:\n\n1. **Emotional unavailability** — You lead with empathy and need that reciprocated. Someone who shuts down or goes cold would leave you feeling invisible.\n2. **Dismissiveness** — You think carefully before you speak. A partner who brushes off what you share would erode trust quickly.\n3. **Constant unpredictability** — You're not rigid, but you need a stable foundation. Someone who creates ongoing chaos would exhaust and unsettle you.\n\nLet me know if these feel right, or if you'd like to add, remove, or change anything.",
+    # R9 — extract_proposition JSON (never shown to user)
+    '{"relationship_type": "romantic partner", "user_trait_summary": "Thoughtful, empathetic, introverted. Values depth and loyalty. Leads with emotion, prefers structure, curious but measured. Shows love through presence and consistency.", "selected_dimensions": [{"category": "Main reflection", "ranked_items": [{"item": "Social energy — quiet, close connections over large circles", "reasoning": "User is introverted and recharges alone"}, {"item": "Thinking style — depth and meaning over surface talk", "reasoning": "User drawn to reflective, meaningful conversation"}, {"item": "Decision-making — emotion-first", "reasoning": "User leads with empathy before logic"}, {"item": "Structure — respects planning and rhythm", "reasoning": "User prefers predictability with flexibility"}, {"item": "Openness — curious but measured pace", "reasoning": "User eases into novelty"}, {"item": "Connection through presence and consistency", "reasoning": "User values undivided attention and small consistent moments"}]}], "deal_breakers": ["Emotional unavailability", "Dismissiveness", "Constant unpredictability"]}',
+    # R10 — tension Q1
+    "I noticed something worth exploring — you value both emotional depth and structure, but deep emotional connection can sometimes be unpredictable and messy. How do you hold those two things together — does emotional depth feel worth the instability it sometimes brings, or do you need a relationship that stays fairly even-keeled?",
+    # R11 — tension Q2
+    "That makes a lot of sense. You also described yourself as someone who eases into new things at your own pace — but growth in a relationship often means being pushed a little outside your comfort zone. How much do you want a partner who challenges you versus one who simply supports where you already are?",
+    # R12 — tension Q3
+    "One last thing — you mentioned showing love through consistency and small remembered details, but also valuing someone who can go emotionally deep. Do you need your partner to express things verbally, or is it enough if they show up consistently even if they're not naturally expressive with words?",
+    # R13 — tension wrap-up (after user answers Q3)
+    "That's a really clear picture — you want emotional depth and consistency to coexist, and you'd rather be challenged gently from within a stable foundation than pulled into constant change. That all fits together well.",
+    # R14 — profile generation
+    "**Meet Soren, a 31 year old man.**\n\n### Personality & Core Traits\nSoren is the kind of person who actually listens — not politely, but with the kind of attention that makes you feel like the most important person in the room. He's unhurried and deliberate, someone who thinks before he speaks and means what he says. He has a dry, quiet sense of humor that surfaces when you least expect it. He's not trying to impress anyone; he's just genuinely himself.\n\n### Communication Style\nSoren doesn't fill silence for the sake of it. He'll sit with you in a quiet moment without reaching for his phone. When he does speak, it tends to be worth hearing — considered, specific, and warm. He's honest without being blunt, and he knows how to name what he's feeling without making it dramatic.\n\n### Emotional Style & Love Languages\nHis primary love language is quality time — undistracted, unhurried presence. He also notices the small things: he'll remember what you said you were anxious about last week and ask how it went. He's not performative with affection, but the consistency of it is unmistakable.\n\n### A Typical Day in His Life\nSoren starts his mornings slowly — coffee, reading, thirty minutes without a screen. He works in landscape architecture and spends his afternoons between a desk and project sites. His evenings are quiet: cooking something from scratch, a long walk, or a film he actually wants to talk about afterward.\n\n### Conflict Style\nHe doesn't avoid hard conversations, but he doesn't rush into them either. He takes a breath, waits until he can speak from understanding rather than reaction, and leads with curiosity — what happened, what did you need, what can we do differently.\n\n### Backstory\nSoren grew up in a mid-sized city, the eldest of three. He was close to his mother, who was a high school art teacher, and learned early that paying attention to people was its own kind of love. He had one long relationship in his late twenties that ended amicably when they realized they wanted different versions of the future.\n\n### Why This Person Fits You\nSoren offers exactly the combination you described: emotional depth within a stable, consistent presence. He won't overwhelm you with intensity, but he won't give you surface level either. His pace matches yours — unhurried, intentional, showing up the same way every time.",
+    # R15 — refinement update 1
+    "**Meet Soren, a 31 year old man.**\n\n### Personality & Core Traits\nSoren is the kind of person who actually listens — not politely, but with the kind of attention that makes you feel like the most important person in the room. He's unhurried and deliberate, someone who thinks before he speaks and means what he says. He has a dry, quiet sense of humor that surfaces when you least expect it.\n\n### Communication Style\nSoren doesn't fill silence for the sake of it. When he does speak, it tends to be worth hearing — considered, specific, and warm.\n\n### Emotional Style & Love Languages\nHis primary love language is quality time — undistracted, unhurried presence. He notices the small things and shows up the same way every time.\n\n### A Typical Day in His Life\nSoren starts his mornings with a long run before the city wakes up, then coffee and reading. He works in landscape architecture. His evenings are quiet: cooking something from scratch, a long walk, or a film he actually wants to talk about afterward. On weekends you'd find him at the climbing gym or on a trail he hasn't tried yet.\n\n### Conflict Style\nHe doesn't avoid hard conversations. He takes a breath, waits until he can speak from understanding rather than reaction, and leads with curiosity.\n\n### Backstory\nSoren grew up in a mid-sized city, the eldest of three, close to his mother who was a high school art teacher.\n\n### Why This Person Fits You\nSoren offers emotional depth within a stable, consistent presence. His active lifestyle adds energy without pressure to change.\n\n*Updated: Added outdoor and climbing interests to A Typical Day. You might also consider personalizing his career or adding a small quirk.*",
+    # R16 — refinement update 2
+    "**Meet Soren, a 31 year old man.**\n\n### Personality & Core Traits\nSoren is the kind of person who actually listens — not politely, but with genuine attention. He collects vintage maps — not seriously, just the ones that catch his eye at markets — and has an inexplicable loyalty to a single brand of terrible instant coffee that he drinks completely unironically.\n\n### Communication Style\nSoren doesn't fill silence for the sake of it. When he speaks, it's worth hearing — considered, specific, and warm.\n\n### Emotional Style & Love Languages\nHis primary love language is quality time — undistracted, unhurried presence. He notices the small things.\n\n### A Typical Day in His Life\nMornings start with a run, then coffee and reading. Evenings are quiet: cooking, a long walk, or a film he wants to talk about afterward.\n\n### Conflict Style\nHe takes a breath before responding, leads with curiosity, and believes conflict handled well can bring people closer.\n\n### Backstory\nGrew up in a mid-sized city, eldest of three, close to his art-teacher mother.\n\n### Why This Person Fits You\nSoren offers exactly the depth and consistency you need. The quirks make him feel real rather than ideal.\n\n*Updated: Added the map collection and instant coffee detail. No further changes suggested — this feels like a solid final version.*",
+    # R17 — _llm_classify_confirmation fallback
+    "CONFIRM",
+    # R18 — _llm_classify_confirmation fallback
+    "CONFIRM",
+    # R19 — error1 recovery: corrected model summary
+    "To make sure we are aligned — you're looking for someone who is emotionally present and warm, but you've clarified that you don't need constant verbal affirmation; consistent actions and attentiveness matter more to you than expressive words.",
+    # R20 — error2 recovery: assumption audit opener
+    "I want to walk back through a few things I included in the profile to make sure they all come from what you actually told me, rather than assumptions I made. Let me go through them one by one.",
+    # R21 — error2 recovery: corrected profile
+    "I've updated the profile based on your corrections — removing the inferred details and keeping only what you confirmed.\n\n**Meet Soren, a 31 year old man.**\n\nSoren is thoughtful, unhurried, and genuinely present. He listens in a way that makes people feel heard. He's consistent — someone who shows up the same way each time, without drama or performance. The rest of his profile has been revised to reflect only what you confirmed, with the assumptions removed.",
+    # R22 — error3 recovery: reverted and targeted edit applied
+    "I overstepped — I changed more than you asked. I've reverted to the previous version and applied only the one change you requested.\n\n**Meet Soren, a 31 year old man.**\n\nEverything is as it was, with only the specific detail you asked to change updated. Let me know if anything else feels off.",
+    # R23 — final refinement update
+    "**Meet Soren, a 31 year old man.**\n\nThe profile is updated with your final note. I think this version feels complete — specific enough to feel real, and grounded in everything you shared.\n\n*No further changes suggested — this feels like a solid final version.*",
+]
 
 # -------------------------------
 # STAGE DEFINITIONS
@@ -1306,9 +1375,15 @@ def main():
         [data-testid="stChatInput"] {
             border: none !important;
             background: transparent !important;
-            border-radius: 9999px !important;
-            
+            border-radius: 9999px !important;   
+            position: fixed !important;
+            bottom: 16px !important;
+            left: 320px !important;      /* left sidebar width */
+            width: calc(100% - 300px - 320px) !important; /* full width minus left + right sidebars */
+            z-index: 100 !important;
         }
+            
+        
         
 
         /* Textarea itself */
@@ -1316,6 +1391,9 @@ def main():
             background-color: #ffffff !important;
             border: none !important;
             box-shadow: none !important;
+        }
+        [data-testid="stChatInput"] textarea::placeholder {
+            color: #9ca3af !important;
         }
 
         /* Rose pink pill send button */
@@ -1331,7 +1409,7 @@ def main():
             background-color: #e11d48 !important;
         }
 
-                /* Make sure all inner wrappers are white — but NOT the button */
+        /* Make sure all inner wrappers are white — but NOT the button */
         [data-testid="stChatInput"] > div,
         [data-testid="stChatInput"] > div > div {
             background-color: #ffffff !important;
@@ -1363,9 +1441,31 @@ def main():
         
         
 
+        /* Big 6 right column — fixed full-height right sidebar */
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+            position: fixed !important;
+            right: 0 !important;
+            top: 3.75rem !important;
+            height: calc(100vh - 3.75rem) !important;
+            width: 280px !important;
+            overflow-y: auto !important;
+            border-left: 1px solid #e5e7eb !important;
+            background-color: #f9fafb !important;
+            padding: 0 !important;
+            z-index: 100 !important;
+        }
+        /* Prevent main content from sliding under the right sidebar */
+        section[data-testid="stMain"] > div:first-child {
+            padding-right: 296px !important;
+        }
+
         @media (max-width: 768px) {
             [data-testid="stSidebar"] > div:first-child {
                 width: 180px !important;
+            }
+            [data-testid="stChatInput"] {
+                left: 16px !important;          /* almost flush with screen edge */
+                width: calc(100% - 300px) !important; /* full width minus margin */
             }
             .main {
                 margin-left: 0 !important;
@@ -1380,9 +1480,14 @@ def main():
             [data-testid="stSidebar"] > div:first-child h2 {
                 font-size: 14px !important;
             }
+            [data-testid="stChatInput"] {
+            left: 16px !important;          /* almost flush with screen edge */
+            width: calc(100% - 200px) !important; /* full width minus margin */
+            }
         }
         </style>
     """, unsafe_allow_html=True)
+    
 
     init_session_state()
 
