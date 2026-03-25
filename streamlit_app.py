@@ -507,6 +507,128 @@ class TrustRecoverySystem:
 # Global trust recovery instance shared across all stages
 trust_recovery = TrustRecoverySystem()
 
+
+# -------------------------------
+# TRUST RECOVERY HELPERS
+# -------------------------------
+
+# Signals that suggest the user is frustrated, correcting, or pushing back.
+_FRUSTRATION_EXACT = frozenset({
+    "no", "wrong", "incorrect", "that's wrong", "that is wrong", "not right",
+    "not what i said", "not what i meant", "that's not right", "that's not what i said",
+    "that's not what i meant", "you misunderstood", "i didn't say that",
+    "i never said that", "you got that wrong", "that's incorrect",
+})
+_FRUSTRATION_PHRASES = (
+    "that's not", "that is not", "i didn't say", "i never said",
+    "you misunderstood", "you got that wrong", "not what i", "that's wrong",
+    "you changed", "you added", "you removed", "that wasn't", "that was not",
+    "stop changing", "you changed more", "i only asked", "i just asked",
+    "only change", "don't change", "leave the rest", "keep the rest",
+    "you're assuming", "you assumed", "i didn't mention", "i never mentioned",
+)
+
+
+def user_frustration_detected(user_input: str) -> bool:
+    """
+    Heuristic check: returns True if the user appears to be correcting,
+    contradicting, or expressing frustration with the AI's output.
+    Used as a safety net when the AI fails to self-tag.
+    """
+    t = (user_input or "").lower().strip()
+    if not t:
+        return False
+    if t in _FRUSTRATION_EXACT:
+        trust_logger.debug("Frustration detected via exact match: %r", t)
+        return True
+    if any(p in t for p in _FRUSTRATION_PHRASES):
+        trust_logger.debug("Frustration detected via phrase match in: %r", t)
+        return True
+    return False
+
+
+# A short, high-signal trust recovery reminder injected just before each LLM call.
+# Keeping it brief makes it less likely to be crowded out by the long system prompt.
+_TRUST_RECOVERY_REMINDER = {
+    "role": "user",
+    "content": (
+        "[SYSTEM REMINDER — trust recovery]: If you are confused, notice a contradiction, "
+        "or the user is pushing back on something you said, you MUST end your response with "
+        "the appropriate tag on its own line: [TRUST_RECOVERY:error1], [TRUST_RECOVERY:error2], "
+        "or [TRUST_RECOVERY:error3]. Do not skip this — the system depends on it."
+    ),
+}
+
+
+def inject_recovery_reminder(messages: list) -> list:
+    """
+    Return a copy of `messages` with the trust recovery reminder appended
+    as the final entry, so the model sees it immediately before generating.
+    Skips injection if the last message already contains a recovery reminder
+    (prevents double-injection on retries).
+    """
+    if messages and "[SYSTEM REMINDER — trust recovery]" in messages[-1].get("content", ""):
+        return messages
+    return messages + [_TRUST_RECOVERY_REMINDER]
+
+
+def dispatch_recovery(recovery_type: str, user_input: str, stage: str):
+    """
+    Central dispatcher: run the appropriate recovery function for the
+    given error type and stage, update session state, and log the event.
+    Returns True if recovery was handled, False otherwise.
+    """
+    ss = st.session_state
+    trust_logger.warning(
+        "🚨 Dispatching trust recovery — type=%s  stage=%s  trigger=%r",
+        recovery_type, stage, user_input[:80]
+    )
+
+    if recovery_type == "error1":
+        context = ss.get("user_portrait") or ss.get("proposition_data") or {}
+        trust_recovery.recover_error1(user_input, ss.stage_messages, context)
+        ss.recovery_pending = None
+        return True
+
+    if recovery_type == "error2":
+        updated = trust_recovery.recover_error2(
+            ss.profile_text or "",
+            ss.get("user_portrait") or {},
+            ss.get("proposition_data") or {},
+        )
+        if updated:
+            ss.profile_text = updated
+            ss.frozen_profile = updated
+            relationship_type = ss.proposition_data.get("relationship_type", "connection")
+            ss.stage_messages = [
+                {"role": "system", "content": REFINEMENT_SYSTEM_PROMPT.format(relationship_type=relationship_type)},
+                {"role": "user", "content": "Here is the current profile:\n\n" + updated},
+                {"role": "assistant", "content": "Profile updated. What else would you like to change?"}
+            ]
+        ss.recovery_pending = None
+        return True
+
+    if recovery_type == "error3":
+        corrected = trust_recovery.recover_error3(
+            ss.get("last_feedback") or user_input,
+            ss.frozen_profile or "",
+            ss.get("proposition_data") or {},
+        )
+        if corrected:
+            ss.profile_text = corrected
+            ss.frozen_profile = corrected
+            relationship_type = ss.proposition_data.get("relationship_type", "connection")
+            ss.stage_messages = [
+                {"role": "system", "content": REFINEMENT_SYSTEM_PROMPT.format(relationship_type=relationship_type)},
+                {"role": "user", "content": "Here is the current profile:\n\n" + corrected},
+                {"role": "assistant", "content": "Profile updated. What else would you like to change?"}
+            ]
+            ss.last_feedback = None
+        ss.recovery_pending = None
+        return True
+
+    return False
+
 # -------------------------------
 # SYSTEM PROMPTS
 # -------------------------------
@@ -964,23 +1086,33 @@ def advance_stage():
 # STAGE HANDLERS
 # -------------------------------
 def handle_about_you(user_input):
-    if st.session_state.recovery_pending == "error1":
-        trust_recovery.recover_error1(user_input, st.session_state.stage_messages, st.session_state.user_portrait)
-        st.session_state.recovery_pending = None
+    # Dispatch any pending recovery from the previous turn before processing new input
+    if st.session_state.recovery_pending:
+        dispatch_recovery(st.session_state.recovery_pending, user_input, "about_you")
+
+    # Python-side frustration fallback: force error1 if the AI missed it
+    if not st.session_state.recovery_pending and user_frustration_detected(user_input):
+        trust_logger.warning(
+            "⚠️  Frustration detected in about_you (AI did not self-tag) — forcing error1 recovery."
+        )
+        dispatch_recovery("error1", user_input, "about_you")
+        return
 
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.session_state.stage_messages.append({"role": "user", "content": user_input})
 
     with st.spinner("Thinking..."):
-        ai_response = call_llm(st.session_state.stage_messages, max_tokens=3000)
+        ai_response = call_llm(inject_recovery_reminder(st.session_state.stage_messages), max_tokens=3000)
 
     if ai_response:
-        st.session_state.recovery_pending = trust_recovery.ai_signals_recovery(ai_response)
+        recovery_type = trust_recovery.ai_signals_recovery(ai_response)
         ai_response = TrustRecoverySystem.strip_recovery_tag(ai_response)
         st.session_state.stage_messages.append({"role": "assistant", "content": ai_response})
         st.session_state.messages.append({"role": "assistant", "content": ai_response})
 
-        if check_stage_completion("about_you", ai_response):
+        if recovery_type:
+            st.session_state.recovery_pending = recovery_type
+        elif check_stage_completion("about_you", ai_response):
             st.session_state.messages.append({"role": "assistant", "content": "Does this capture you well? Feel free to correct anything or add something important I missed."})
             st.session_state.awaiting_summary_confirmation = True
 
@@ -1036,9 +1168,17 @@ def _get_proposition_conversation_text():
     )
 
 def handle_proposition(user_input):
-    if st.session_state.recovery_pending == "error1":
-        trust_recovery.recover_error1(user_input, st.session_state.stage_messages, st.session_state.user_portrait)
-        st.session_state.recovery_pending = None
+    # Dispatch any pending recovery from the previous turn
+    if st.session_state.recovery_pending:
+        dispatch_recovery(st.session_state.recovery_pending, user_input, "proposition")
+
+    # Python-side frustration fallback
+    if not st.session_state.recovery_pending and user_frustration_detected(user_input):
+        trust_logger.warning(
+            "⚠️  Frustration detected in proposition (AI did not self-tag) — forcing error1 recovery."
+        )
+        dispatch_recovery("error1", user_input, "proposition")
+        return
 
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.session_state.stage_messages.append({"role": "user", "content": user_input})
@@ -1084,7 +1224,7 @@ def handle_proposition(user_input):
             ]
 
             with st.spinner("Updating reflection..."):
-                ai_response = call_llm(trait_messages, max_tokens=4000)
+                ai_response = call_llm(inject_recovery_reminder(trait_messages), max_tokens=4000)
 
             if ai_response:
                 st.session_state.recovery_pending = trust_recovery.ai_signals_recovery(ai_response)
@@ -1109,7 +1249,7 @@ def handle_proposition(user_input):
             ]
 
             with st.spinner("Great! Now I'm thinking about your potential deal breakers..."):
-                ai_response = call_llm(db_messages, max_tokens=3000)
+                ai_response = call_llm(inject_recovery_reminder(db_messages), max_tokens=3000)
 
             if ai_response:
                 st.session_state.recovery_pending = trust_recovery.ai_signals_recovery(ai_response)
@@ -1263,12 +1403,25 @@ def handle_refinement(user_input):
     st.session_state.messages.append({"role": "user", "content": user_input})
 
     # Treat confirmation phrases like "yes" / "looks good" / "that's right" as done — same as "done".
-    # Keep exit / quit / finished for users who type those explicitly.
     t = (user_input or "").lower().strip()
     if user_signals_confirmation(user_input) or t in {"exit", "quit", "finished"}:
         final_msg = "Wonderful! I hope this profile gives you a clear sense of what you're looking for. Good luck — you deserve someone great."
         st.session_state.messages.append({"role": "assistant", "content": final_msg})
         advance_stage()
+        return
+
+    # Python-side frustration fallback: if the user clearly says the AI changed too much or
+    # included something wrong, force the appropriate recovery even if the AI did not self-tag.
+    if user_frustration_detected(user_input):
+        _overscope_signals = ("you changed", "you added", "you removed", "stop changing",
+                              "you changed more", "i only asked", "i just asked",
+                              "only change", "don't change", "leave the rest", "keep the rest")
+        forced_type = "error3" if any(s in t for s in _overscope_signals) else "error2"
+        trust_logger.warning(
+            "⚠️  Frustration detected in refinement (AI did not self-tag) — forcing %s recovery.",
+            forced_type
+        )
+        dispatch_recovery(forced_type, user_input, "refinement")
         return
 
     st.session_state.stage_messages.append({
@@ -1281,52 +1434,20 @@ def handle_refinement(user_input):
     })
 
     with st.spinner("Updating profile..."):
-        ai_response = call_llm(st.session_state.stage_messages, max_tokens=3000)
+        ai_response = call_llm(inject_recovery_reminder(st.session_state.stage_messages), max_tokens=3000)
 
     if ai_response:
         recovery_type = trust_recovery.ai_signals_recovery(ai_response)
         clean_response = TrustRecoverySystem.strip_recovery_tag(ai_response)
 
-        if recovery_type == "error2":
-            # AI detected a false assumption — run full assumption audit
-            updated_profile = trust_recovery.recover_error2(
-                st.session_state.profile_text,
-                st.session_state.user_portrait,
-                st.session_state.proposition_data
-            )
-            if updated_profile:
-                st.session_state.profile_text = updated_profile
-                st.session_state.frozen_profile = updated_profile
-                relationship_type = st.session_state.proposition_data.get("relationship_type", "connection")
-                st.session_state.stage_messages = [
-                    {"role": "system", "content": REFINEMENT_SYSTEM_PROMPT.format(relationship_type=relationship_type)},
-                    {"role": "user", "content": "Here is the current profile:\n\n" + updated_profile},
-                    {"role": "assistant", "content": "Profile updated. What else would you like to change?"}
-                ]
-        elif recovery_type == "error3":
-            # AI changed more than asked — revert and apply targeted edit
-            corrected = trust_recovery.recover_error3(
-                st.session_state.last_feedback or user_input,
-                st.session_state.frozen_profile,
-                st.session_state.proposition_data
-            )
-            if corrected:
-                st.session_state.frozen_profile = corrected
-                st.session_state.profile_text = corrected
-                relationship_type = st.session_state.proposition_data.get("relationship_type", "connection")
-                st.session_state.stage_messages = [
-                    {"role": "system", "content": REFINEMENT_SYSTEM_PROMPT.format(relationship_type=relationship_type)},
-                    {"role": "user", "content": "Here is the current profile:\n\n" + corrected},
-                    {"role": "assistant", "content": "Profile updated. What else would you like to change?"}
-                ]
-                st.session_state.last_feedback = None
+        if recovery_type:
+            dispatch_recovery(recovery_type, user_input, "refinement")
         else:
             st.session_state.stage_messages.append({"role": "assistant", "content": clean_response})
             st.session_state.messages.append({"role": "assistant", "content": clean_response})
             st.session_state.profile_text = clean_response
             st.session_state.frozen_profile = clean_response
             st.session_state.last_feedback = user_input
-
 # -------------------------------
 # MAIN UI
 # -------------------------------
