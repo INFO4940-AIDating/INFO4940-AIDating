@@ -1167,7 +1167,8 @@ def _backfill_live_traits_from_portrait(portrait):
         if val and str(val).strip() and dim not in new_traits:
             new_traits[dim] = {"label": str(val).strip(), "confidence": 0.75, "evidence_count": 4}
     _merge_live_traits(new_traits)
-    _seed_match_priorities_from_portrait(portrait)
+    # Don't seed priorities here — wait for start_proposition_stage which has
+    # the full conversation + tension context for better priority generation.
 
 
 # ── Match Priority Seeding ───────────────────────────────────────────────
@@ -1193,7 +1194,7 @@ _TEST_PRIORITIES = [
 ]
 
 
-def _seed_match_priorities_from_portrait(portrait):
+def _seed_match_priorities_from_portrait(portrait, conversation_context="", tension_context=""):
     """Infer what the user values most in a partner and store as match_priorities.
     Only runs once — does not overwrite a list the user has already reordered.
     """
@@ -1206,19 +1207,31 @@ def _seed_match_priorities_from_portrait(portrait):
 
     portrait_text = json.dumps(portrait, indent=2)
     relationship_type = st.session_state.get("relationship_type", "relationship")
+
+    extra_context = ""
+    if conversation_context:
+        extra_context += f"\n\nCONVERSATION (the user's own words — use specific details they mentioned):\n{conversation_context}"
+    if tension_context:
+        extra_context += f"\n\nCLARIFICATIONS (important nuances the user explained):\n{tension_context}"
+
     messages = [
         {"role": "system", "content": (
-            "Based on a user's personality portrait, infer 4-6 qualities they most "
+            f"Based on a user's personality portrait and their conversation, infer 4-6 qualities they most "
             f"value in a partner for a {relationship_type}. "
+            "Pay close attention to SPECIFIC things the user mentioned — activities, traits, behaviors, "
+            "preferences. If they mentioned specific activities (e.g. badminton, hiking) or specific "
+            "qualities (e.g. honest feedback, pushing them to improve), create priorities that reflect "
+            "those specifics rather than generic categories.\n\n"
             "Return ONLY a JSON array ordered from most to least important. "
-            "Each item: {\"id\": \"...\", \"label\": \"short phrase (2-4 words)\", "
-            "\"reason\": \"one sentence explaining why this matters given the portrait\"}. "
-            "Prefer IDs from: shared_values, emotional_depth, intellectual_connection, "
-            "space_independence, communication_style, humor_warmth, life_goals, "
-            "reliability_trust, spontaneity, physical_chemistry. "
-            "Create a new id+label+reason if none fit. No other text."
+            "Each item: {\"id\": \"snake_case_id\", \"label\": \"short phrase (2-4 words)\", "
+            "\"reason\": \"one sentence explaining why this matters given what the user said\"}. "
+            "You may use IDs from this list if they fit: shared_values, emotional_depth, "
+            "intellectual_connection, space_independence, communication_style, humor_warmth, "
+            "life_goals, reliability_trust, spontaneity, physical_chemistry. "
+            "But CREATE new specific id+label+reason whenever the user's actual words suggest "
+            "something more precise. No other text."
         )},
-        {"role": "user", "content": f"Portrait:\n{portrait_text}"}
+        {"role": "user", "content": f"Portrait:\n{portrait_text}{extra_context}"}
     ]
     response = call_llm(messages, temperature=0.2, max_tokens=600)
     try:
@@ -1289,7 +1302,7 @@ _TEST_DEAL_BREAKERS = [
 ]
 
 
-def _generate_deal_breaker_items(portrait, relationship_type):
+def _generate_deal_breaker_items(portrait, relationship_type, conversation_context="", tension_context=""):
     """Generate the user's deal breakers as a structured, ordered list.
     Only runs once — does not overwrite if already seeded.
     """
@@ -1307,18 +1320,24 @@ def _generate_deal_breaker_items(portrait, relationship_type):
             f"{i+1}. {p['label']}" + (f" — {p['reason']}" if p.get("reason") else "")
             for i, p in enumerate(st.session_state.match_priorities)
         )
+    extra_context = ""
+    if conversation_context:
+        extra_context += f"\n\nCONVERSATION (the user's own words):\n{conversation_context}"
+    if tension_context:
+        extra_context += f"\n\nCLARIFICATIONS (important nuances):\n{tension_context}"
     messages = [
         {"role": "system", "content": (
-            f"Based on the user's personality portrait and confirmed priorities, "
+            f"Based on the user's personality portrait, confirmed priorities, and their conversation, "
             f"infer 2-4 genuine deal breakers for their {relationship_type}. "
             "These should be behaviours or traits that are non-negotiable given who this person is — "
             "things that would be genuinely incompatible with their personality and needs. "
+            "Pay attention to specific things the user mentioned in conversation. "
             "Return ONLY a JSON array ordered from most to least critical. "
             "Each item: {\"id\": \"snake_case_id\", \"label\": \"short phrase (2-4 words)\", "
             "\"reason\": \"one sentence explaining why this would be incompatible\"}. "
             "No other text."
         )},
-        {"role": "user", "content": f"Portrait:\n{portrait_text}{priorities_text}"}
+        {"role": "user", "content": f"Portrait:\n{portrait_text}{priorities_text}{extra_context}"}
     ]
     response = call_llm(messages, temperature=0.2, max_tokens=600)
     try:
@@ -1605,10 +1624,38 @@ def start_proposition_stage():
     st.session_state.awaiting_deal_breakers = False
     st.session_state.deal_breakers_confirmed = False
 
-    # Ensure match priorities are seeded (normally done by _backfill_live_traits_from_portrait)
+    # Build conversation context from chat history
+    conversation_context = "\n".join(
+        f"{m['role'].upper()}: {m['content']}"
+        for m in st.session_state.messages
+        if m["role"] in ("user", "assistant")
+    )
+
+    # Extract tension clarifications specifically
+    tension_context = ""
+    in_tension = False
+    tension_exchanges = []
+    for msg in st.session_state.messages:
+        content = msg.get("content", "")
+        if "Let me think through a couple of things" in content:
+            in_tension = True
+            continue
+        if "Thanks for working through that with me" in content:
+            in_tension = False
+            continue
+        if in_tension and msg["role"] in ("user", "assistant"):
+            tension_exchanges.append(f"{msg['role'].upper()}: {content}")
+    if tension_exchanges:
+        tension_context = "\n".join(tension_exchanges)
+
+    # Seed match priorities using portrait + conversation + tension context
     if not st.session_state.match_priorities:
         with st.spinner("Analyzing your priorities..."):
-            _seed_match_priorities_from_portrait(st.session_state.user_portrait)
+            _seed_match_priorities_from_portrait(
+                st.session_state.user_portrait,
+                conversation_context=conversation_context,
+                tension_context=tension_context,
+            )
     st.session_state.awaiting_priority_ranking = True
 
 def _get_proposition_conversation_text():
@@ -2796,9 +2843,32 @@ def render_priority_ranking():
         st.session_state.messages.append({"role": "assistant", "content": priority_summary})
 
         with st.spinner("Moving on to deal breakers..."):
+            # Build conversation + tension context for deal breaker generation
+            _db_conversation = "\n".join(
+                f"{m['role'].upper()}: {m['content']}"
+                for m in st.session_state.messages
+                if m["role"] in ("user", "assistant")
+            )
+            _db_tension = ""
+            _in_t = False
+            _t_exchanges = []
+            for _msg in st.session_state.messages:
+                _content = _msg.get("content", "")
+                if "Let me think through a couple of things" in _content:
+                    _in_t = True
+                    continue
+                if "Thanks for working through that with me" in _content:
+                    _in_t = False
+                    continue
+                if _in_t and _msg["role"] in ("user", "assistant"):
+                    _t_exchanges.append(f"{_msg['role'].upper()}: {_content}")
+            if _t_exchanges:
+                _db_tension = "\n".join(_t_exchanges)
             _generate_deal_breaker_items(
                 st.session_state.user_portrait,
                 st.session_state.relationship_type,
+                conversation_context=_db_conversation,
+                tension_context=_db_tension,
             )
         st.session_state.awaiting_deal_breaker_ranking = True
         st.rerun()
