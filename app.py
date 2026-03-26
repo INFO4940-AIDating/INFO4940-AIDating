@@ -2228,6 +2228,66 @@ def render_generate_profile_button():
 
 
 # -----------------------------------------------------------------------
+@st.dialog("Welcome to the Relationship Profile Builder", width="large")
+def onboarding_modal():
+    """Onboarding modal shown on every app load before the user can interact."""
+
+    st.markdown(
+        """
+        <style>
+        /* Ensure modal sits above all other UI (Big 6 panel, etc.) */
+        div[data-testid="stModal"] {
+            z-index: 9999 !important;
+        }
+        /* Hide the dialog close (X) button */
+        [data-testid="stDialog"] button[aria-label="Close"],
+        [data-testid="stDialog"] button[kind="header"] {
+            display: none !important;
+        }
+        /* Prevent closing by clicking the backdrop overlay */
+        div[data-testid="stModal"]::before,
+        div[data-testid="stModal"] > div:first-child {
+            pointer-events: none !important;
+        }
+        div[data-testid="stModal"] [data-testid="stDialog"] {
+            pointer-events: auto !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("")
+
+    st.markdown("#### ✅ What this tool does")
+    st.markdown(
+        """
+- Learns about you through a guided conversation
+- Builds a detailed profile of your ideal connection
+- Works for any type of relationship — romantic, friendship, study partner, and more
+        """
+    )
+
+    st.markdown("")
+
+    st.markdown("#### 🚫 What this tool doesn't do")
+    st.markdown(
+        """
+- Match you with real people
+- Store your data after your session
+        """
+    )
+
+    st.markdown("")
+
+    # Centered "Let's go" button
+    _col_l, _col_c, _col_r = st.columns([1, 1, 1])
+    with _col_c:
+        if st.button("Let's go", key="_onboarding_go", type="primary", use_container_width=True):
+            st.session_state._onboarding_dismissed = True
+            st.rerun()
+
+
 def main():
     st.set_page_config(
         page_title="AI Relationship Profile Builder",
@@ -2235,6 +2295,13 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded"
     )
+
+    init_session_state()
+
+    # Show onboarding modal on every fresh load (before any other UI renders)
+    if not st.session_state.get("_onboarding_dismissed", False):
+        onboarding_modal()
+        st.stop()
 
     st.markdown("""
         <style>
@@ -2354,6 +2421,11 @@ def main():
         
         
 
+        /* Ensure onboarding modal sits above the Big 6 fixed panel */
+        div[data-testid="stModal"] {
+            z-index: 9999 !important;
+        }
+
         /* Big 6 right column — fixed full-height right sidebar */
         [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
             position: fixed !important;
@@ -2422,8 +2494,6 @@ def main():
         </style>
     """, unsafe_allow_html=True)
     
-
-    init_session_state()
 
     # Sidebar with progress (+ substeps on the active stage when applicable)
     with st.sidebar:
@@ -2701,7 +2771,7 @@ def render_chat_content():
                 st.markdown(msg["content"])
 
     # "Skip Question" link — shown after the last assistant message if it's a question
-    _skippable_stages = ("about_you", "tension", "intro")
+    _skippable_stages = ("about_you", "tension")
     _last_msg = st.session_state.messages[-1] if st.session_state.messages else None
     _show_skip = (
         _last_msg is not None
@@ -2757,11 +2827,7 @@ def render_chat_content():
                 "content": "What kind of relationship or connection are you looking for? (e.g., romantic partner, close friend, squash buddy, study partner)"
             })
 
-        _skip_active = st.session_state.pop("_skip_question", False)
-        user_input = st.chat_input("Your response...")
-        if _skip_active:
-            user_input = "romantic partner"
-        if user_input:
+        if user_input := st.chat_input("Your response..."):
             st.session_state.relationship_type = user_input
             st.session_state.messages.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
