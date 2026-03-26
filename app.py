@@ -7,7 +7,7 @@ import streamlit.components.v1 as components
 # CONFIG
 # -------------------------------
 MODEL_PATH = "llama-3.1-8b.gguf"
-TEST_MODE = True  # Set to False to use the real model
+TEST_MODE = False  # Set to False to use the real model
 
 # 25 mock LLM responses covering the full happy path + trust recovery.
 # Ordered to match the call sequence:
@@ -971,10 +971,23 @@ def _llm_classify_confirmation(user_input: str) -> bool:
         {
             "role": "system",
             "content": (
-                "You are a classifier. The user just replied to a prompt asking them to confirm or suggest changes. "
-                "Determine whether the user is CONFIRMING (accepting, agreeing, expressing satisfaction) "
-                "or giving FEEDBACK (requesting changes, additions, or corrections).\n\n"
-                "Reply with exactly one word: CONFIRM or FEEDBACK"
+                "You are a strict classifier. The user just replied to a prompt asking them to confirm a profile or suggest changes.\n\n"
+                "Reply CONFIRM **only** if the user is purely accepting with zero requested edits.\n"
+                "Reply FEEDBACK if the user asks to change, add, remove, or update ANYTHING — "
+                "even if they also say something positive (e.g. 'looks great, just change the name').\n\n"
+                "Examples that are FEEDBACK:\n"
+                "- 'change the name to Alex'\n"
+                "- 'make me 25'\n"
+                "- 'can you update the age'\n"
+                "- 'looks good but make the name different'\n"
+                "- 'set the gender to male'\n"
+                "- 'I want a different name'\n\n"
+                "Examples that are CONFIRM:\n"
+                "- 'yes'\n"
+                "- 'looks good'\n"
+                "- 'perfect, love it'\n"
+                "- 'no changes needed'\n\n"
+                "When in doubt, reply FEEDBACK. Reply with exactly one word: CONFIRM or FEEDBACK"
             ),
         },
         {"role": "user", "content": user_input},
@@ -3213,10 +3226,11 @@ def render_chat_content():
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-    # "Skip Question" link — shown after the last assistant message if it's a question
+    # "Skip Question" link — reserve a placeholder here, render after chat_input
+    # so we know whether the user just submitted a response on this render pass.
     _skippable_stages = ("about_you", "tension")
     _last_msg = st.session_state.messages[-1] if st.session_state.messages else None
-    _show_skip = (
+    _skip_eligible = (
         _last_msg is not None
         and _last_msg["role"] == "assistant"
         and "?" in _last_msg["content"]
@@ -3224,35 +3238,38 @@ def render_chat_content():
         and not st.session_state.get("awaiting_summary_confirmation")
         and not st.session_state.get("awaiting_priority_ranking")
     )
-    if _show_skip:
-        _skip_col1, _skip_col2 = st.columns([3, 1])
-        with _skip_col2:
-            st.button(
-                "Skip Question",
-                key="_skip_q_btn",
-                on_click=lambda: st.session_state.__setitem__("_skip_question", True),
-                type="tertiary",
-            )
-        # Style the skip button to look like an underlined text link
-        st.markdown("""
-        <style>
-        /* Style the Skip Question button as underlined text */
-        button[data-testid="stBaseButton-tertiary"][kind="tertiary"] {
-            color: #888 !important;
-            font-size: 13px !important;
-            text-decoration: underline !important;
-            background: none !important;
-            border: none !important;
-            box-shadow: none !important;
-            padding: 0 !important;
-            margin-top: -12px !important;
-            font-family: "Source Sans Pro", sans-serif !important;
-        }
-        button[data-testid="stBaseButton-tertiary"][kind="tertiary"]:hover {
-            color: #555 !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
+    _skip_placeholder = st.empty() if _skip_eligible else None
+
+    def _render_skip_button(placeholder):
+        """Render the skip button inside the given placeholder."""
+        with placeholder.container():
+            _skip_col1, _skip_col2 = st.columns([3, 1])
+            with _skip_col2:
+                st.button(
+                    "Skip Question",
+                    key="_skip_q_btn",
+                    on_click=lambda: st.session_state.__setitem__("_skip_question", True),
+                    type="tertiary",
+                )
+            st.markdown("""
+            <style>
+            /* Style the Skip Question button as underlined text */
+            button[data-testid="stBaseButton-tertiary"][kind="tertiary"] {
+                color: #888 !important;
+                font-size: 13px !important;
+                text-decoration: underline !important;
+                background: none !important;
+                border: none !important;
+                box-shadow: none !important;
+                padding: 0 !important;
+                margin-top: -12px !important;
+                font-family: "Source Sans Pro", sans-serif !important;
+            }
+            button[data-testid="stBaseButton-tertiary"][kind="tertiary"]:hover {
+                color: #555 !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
 
     if (
         st.session_state.stage == "profile"
@@ -3303,6 +3320,9 @@ def render_chat_content():
             user_input = st.chat_input("Your response...")
             if _skip_active:
                 user_input = "I'd rather not answer this one — let's move on."
+            # Render skip button only if user hasn't submitted on this pass
+            if not user_input and _skip_placeholder is not None:
+                _render_skip_button(_skip_placeholder)
             if user_input:
                 st.session_state.messages.append({"role": "user", "content": user_input})
                 st.session_state.stage_messages.append({"role": "user", "content": user_input})
@@ -3349,6 +3369,9 @@ def render_chat_content():
         user_input = st.chat_input("Your response...")
         if _skip_active:
             user_input = "I'm not sure — let's move on to the next one."
+        # Render skip button only if user hasn't submitted on this pass
+        if not user_input and _skip_placeholder is not None:
+            _render_skip_button(_skip_placeholder)
         if user_input:
             with st.chat_message("user"):
                 st.markdown(user_input)
