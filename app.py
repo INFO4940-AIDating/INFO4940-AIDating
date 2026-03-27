@@ -2473,16 +2473,16 @@ def main():
             border-radius: 9999px !important;
             position: fixed !important;
             bottom: 16px !important;
-            left: 5% !important;
-            right: calc(296px + 1%) !important;  /* right panel reserve + gutter */
+            left: calc(320px + 2rem) !important;
+            right: 296px !important;
             width: auto !important;
             z-index: 100 !important;
         }
 
-        /* When sidebar is expanded, keep chat input inside main content area */
-        section[data-testid="stSidebar"][aria-expanded="true"] ~ section[data-testid="stMain"] [data-testid="stChatInput"],
-        section[data-testid="stSidebar"][aria-expanded="true"] ~ div [data-testid="stChatInput"] {
-            left: calc(320px + 16px) !important;
+        /* When sidebar is collapsed, start from window edge */
+        section[data-testid="stSidebar"][aria-expanded="false"] ~ section[data-testid="stMain"] [data-testid="stChatInput"],
+        section[data-testid="stSidebar"][aria-expanded="false"] ~ div [data-testid="stChatInput"] {
+            left: 2rem !important;
         }
             
         
@@ -2581,9 +2581,14 @@ def main():
             padding: 0 !important;
             z-index: auto !important;
         }
-        /* Prevent main content from sliding under the right sidebar */
+        /* Reserve right panel space, balance left padding, clear fixed input bar */
         section[data-testid="stMain"] > div:first-child {
             padding-right: 296px !important;
+            padding-left: 2rem !important;
+        }
+        section[data-testid="stMain"],
+        .main .block-container {
+            padding-bottom: 100px !important;
         }
 
         @media (max-width: 768px) {
@@ -2629,7 +2634,7 @@ def main():
 
     # Main content — two-column layout: chat left, Big 6 right
     st.title("AI Relationship Profile Builder")
-    left_col, right_col = st.columns([4, 1.5])
+    left_col, right_col = st.columns([10, 1])
 
     with right_col:
         render_big6_panel()
