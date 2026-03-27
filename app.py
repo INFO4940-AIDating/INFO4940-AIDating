@@ -952,7 +952,7 @@ _CONFIRMATION_EXACT = frozenset({
     "that's it", "all good", "looks right", "looks great", "no changes", "fine",
     "done", "agreed", "sounds good", "works for me", "nothing to add",
     "feels good", "feel good", "feels great", "feels right", "that's great",
-    "love it", "love this", "nailed it",
+    "love it", "love this", "nailed it", "this is great",
 })
 _CONFIRMATION_PHRASES = (
     "that's right", "that is right", "these are right", "this is right",
@@ -1255,7 +1255,7 @@ def _seed_match_priorities_from_portrait(portrait, conversation_context="", tens
         )},
         {"role": "user", "content": f"Portrait:\n{portrait_text}{extra_context}"}
     ]
-    response = call_llm(messages, temperature=0.2, max_tokens=600)
+    response = call_llm(messages, temperature=0.2, max_tokens=3000)
     try:
         start = response.find("[")
         end = response.rfind("]") + 1
@@ -1270,7 +1270,7 @@ def _seed_match_priorities_from_portrait(portrait, conversation_context="", tens
             {"role": "assistant", "content": response or ""},
             {"role": "user", "content": "Your response was not valid JSON or had too few items. Return ONLY a JSON array of exactly 5 items — nothing else."}
         ]
-        retry = call_llm(retry_messages, temperature=0.1, max_tokens=600)
+        retry = call_llm(retry_messages, temperature=0.1, max_tokens=3000)
         try:
             start = retry.find("[")
             end = retry.rfind("]") + 1
@@ -1323,7 +1323,7 @@ def _generate_looking_for_items(portrait, relationship_type):
         )},
         {"role": "user", "content": f"Portrait:\n{portrait_text}{priorities_text}"}
     ]
-    response = call_llm(messages, temperature=0.2, max_tokens=600)
+    response = call_llm(messages, temperature=0.2, max_tokens=3000)
     try:
         start = response.find("[")
         end = response.rfind("]") + 1
@@ -2407,7 +2407,7 @@ def onboarding_modal():
 - Learns about you through a guided conversation
 - Builds a detailed profile of your ideal connection
 - Works for any type of relationship — romantic, friendship, study partner, and more
-- Assumes the age and gender for your profile. If we make a mistake, feel free to correct it after profile generation!
+- **Assumes the age and gender for your profile. If we make a mistake, feel free to correct it after profile generation!**
         """
     )
 
